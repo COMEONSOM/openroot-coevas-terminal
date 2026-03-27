@@ -1,0 +1,17 @@
+{
+  "name": "coevas-terminal",
+  "version": "1.1.0",
+  "author": "Openroot Systems",
+  "description": "Coevas Terminal — 8K Media Downloader by Openroot Systems",
+  "main": "main.js",
+  "type": "module",
+  "private": true,
+
+  "scripts": {
+    "start": "electron ."
+  },
+
+  "devDependencies": {
+    "electron": "^40.0.0"
+  }
+}

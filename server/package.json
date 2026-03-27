@@ -1,0 +1,19 @@
+{
+  "name": "coevas-downloader-server",
+  "version": "1.1.0",
+  "description": "Coevas Terminal — Embedded Express Server",
+  "author": "Openroot Systems",
+  "type": "module",
+  "private": true,
+
+  "scripts": {
+    "start": "node server.js"
+  },
+
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.2.1",
+    "mime-types": "^2.1.35"
+  }
+}

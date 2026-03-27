@@ -1,0 +1,41 @@
+# ── Dependencies ───────────────────────────────────────
+node_modules/
+server/node_modules/
+electron/node_modules/
+
+# ── Build output ────────────────────────────────────────
+dist/
+out/
+build/
+
+# ── Electron cache ──────────────────────────────────────
+.webpack/
+
+# ── Binaries (too large for GitHub) ─────────────────────
+server/yt-dlp.exe
+server/ffmpeg.exe
+server/ffprobe.exe
+server/gallery-dl.exe
+*.exe
+*.bin
+
+# ── Cookies (sensitive) ─────────────────────────────────
+cookies_fbinsta
+server/cookies_fbinsta
+server/cookies*
+*.cookies
+
+# ── Logs / temp ─────────────────────────────────────────
+*.log
+temp/
+tmp/
+
+# ── OS junk ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp

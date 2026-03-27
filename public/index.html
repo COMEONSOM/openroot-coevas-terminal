@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Coevas Terminal</title>
+
+  <!-- ✅ FIXED PATHS -->
+  <link rel="icon" type="image/png" href="./assets/company-icon.png" />
+  <link rel="apple-touch-icon" href="./assets/company-icon.png" />
+  <link rel="stylesheet" href="./style.css" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <!-- ✅ FIXED -->
+        <img src="./assets/company-icon.png" alt="Logo" class="logo" />
+
+        <div class="brand-copy">
+          <div class="title">COEVAS TERMINAL</div>
+          <div class="subtitle">MEDIA PIPELINE / ELECTRON RUNTIME</div>
+        </div>
+      </div>
+
+      <div class="platform-badge">
+        <span class="badge-label">SOURCE</span>
+
+        <!-- ✅ FIXED -->
+        <img id="platformIcon" src="./icons/default.svg" alt="Platform" />
+
+        <span id="platformText">Paste a link</span>
+      </div>
+    </header>
+
+    <main class="card">
+      <div class="panel-header">
+        <div class="panel-title">Transfer Job</div>
+        <div class="panel-meta">
+          Realtime probe, format negotiation, and process streaming active
+        </div>
+      </div>
+
+      <!-- URL INPUT -->
+      <div class="field">
+        <label for="url">Target URL</label>
+        <input id="url" placeholder="Paste YouTube / Facebook / Instagram / Threads link here" />
+      </div>
+
+      <!-- FILE INFO -->
+      <div id="fileInfo" class="file-info" style="display:none;">
+        <div>
+          <span>Resolution</span>
+          <strong id="fileResolution">-</strong>
+        </div>
+        <div>
+          <span>Codec</span>
+          <strong><span id="codecBadge" class="codec-badge">-</span></strong>
+        </div>
+        <div>
+          <span>Estimated size</span>
+          <strong id="fileSize">-</strong>
+        </div>
+      </div>
+
+      <!-- MODE SELECTOR -->
+      <div class="field">
+        <label for="mode">Download Type</label>
+        <select id="mode">
+          <option value="video" selected>Download Video</option>
+          <option value="audio">Download Audio (MP3)</option>
+          <option value="carousel">Download Carousel (ZIP)</option>
+        </select>
+      </div>
+
+      <!-- OPTIONS -->
+      <div class="options-row">
+        <div class="field">
+          <label for="quality">Output Profile</label>
+          <select id="quality">
+            <option value="2160">4K (2160p)</option>
+            <option value="1440">2K (1440p)</option>
+            <option value="1080" selected>1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+          </select>
+        </div>
+
+        <div class="toggle">
+          <label>
+            <input type="checkbox" id="maxQuality" />
+            Allow AV1 (best codec)
+          </label>
+          <small>
+            Better quality for 2K/4K, may not play on all devices
+          </small>
+        </div>
+      </div>
+
+      <!-- ACTIONS -->
+      <div class="actions">
+        <button id="download" class="primary" type="button">
+          Run Pipeline
+        </button>
+        <button id="cancel" class="danger" type="button" style="display:none;">
+          Abort Job
+        </button>
+      </div>
+
+      <!-- PROGRESS -->
+      <div id="progress" class="progress-wrap" style="display:none;">
+        <div class="progress-track">
+          <div id="bar"></div>
+          <span class="progress-overlay" id="percent">0%</span>
+        </div>
+      </div>
+
+      <!-- STATUS -->
+      <div class="status-wrap">
+        <div class="status-label">Pipeline Status</div>
+        <div id="status" class="status-text"></div>
+      </div>
+
+      <!-- LOGS -->
+      <div class="logs-head">Process Output</div>
+      <pre id="logs" class="log-box" style="display:none;"></pre>
+    </main>
+  </div>
+
+  <!-- ✅ FIXED -->
+  <script src="./app.js"></script>
+</body>
+</html>

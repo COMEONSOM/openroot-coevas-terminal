@@ -1,0 +1,60 @@
+{
+  "name": "coevas-panel-openroot",
+  "version": "1.1.0",
+  "description": "Coevas Terminal — 8K Media Downloader",
+  "author": "Openroot Systems",
+  "type": "module",
+  "main": "electron/main.js",
+
+  "scripts": {
+    "start": "electron .",
+    "clean": "rimraf dist",
+    "build": "npm run clean && electron-builder"
+  },
+
+  "devDependencies": {
+    "electron": "^40.0.0",
+    "electron-builder": "^26.8.1",
+    "rimraf": "^6.0.1"
+  },
+
+  "build": {
+    "appId": "com.openroot.coevas",
+    "productName": "Coevas Terminal",
+    "copyright": "© 2026 Openroot Systems",
+
+    "directories": {
+      "output": "dist"
+    },
+
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+
+    "extraResources": [
+      { "from": "server", "to": "server" },
+      { "from": "public", "to": "public" }
+    ],
+
+    "win": {
+      "target": "nsis",
+      "artifactName": "CoevasTerminalSetup.exe",
+      "icon": "public/assets/company-icon.ico",
+      "legalTrademarks": "Openroot Systems"
+    },
+
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Coevas Terminal",
+      "installerIcon": "public/assets/company-icon.ico",
+      "uninstallerIcon": "public/assets/company-icon.ico",
+      "installerHeaderIcon": "public/assets/company-icon.ico"
+    }
+  }
+}
