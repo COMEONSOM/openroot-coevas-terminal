@@ -1,22 +1,29 @@
 // ======================================================
-// FINAL SERVER (PRODUCTION READY - STABLE BUILD)
+// server.js — FINAL SERVER (PRODUCTION READY)
 // ======================================================
 
-import express from "express";
-import path from "path";
+import express         from "express";
+import path            from "path";
 import { fileURLToPath } from "url";
-import rateLimit from "express-rate-limit";
-import { spawn } from "child_process";
-import fs, { createReadStream, existsSync, statSync } from "fs";
-import os from "os";
-import mime from "mime-types";
+import rateLimit       from "express-rate-limit";
+import { spawn }       from "child_process";
+import fs, {
+  createReadStream,
+  existsSync,
+  statSync
+}                      from "fs";
+import os              from "os";
+import mime            from "mime-types";
 
 import { downloadYouTube }     from "./youtube.js";
 import { downloadInstagram }   from "./instagram.js";
 import { downloadFacebook }    from "./facebook.js";
 import { downloadThreads }     from "./threads.js";
 import { validateDownloadUrl } from "./utils/validateUrl.js";
-import { startYtDlp, startYtDlpInfo } from "./utils/runYtDlp.js";
+import {
+  spawnYtDlpProbe,
+  spawnYtDlpProbeNoCookies
+}                              from "./utils/runYtDlp.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -25,22 +32,18 @@ const app          = express();
 const DEFAULT_PORT = Number(process.env.PORT) || 3000;
 
 /* ======================================================
-   COOKIES — writable path (works in both dev + built .exe)
-   In dev:  falls back to server/ folder (source)
-   In prod: uses AppData\Roaming\Coevas Terminal\ (writable)
+   COOKIES
 ====================================================== */
 const COOKIES_DIR = process.env.COEVAS_USER_DATA
   || path.join(os.homedir(), ".coevas");
 
-// Ensure the directory exists
 if (!fs.existsSync(COOKIES_DIR)) {
   fs.mkdirSync(COOKIES_DIR, { recursive: true });
 }
 
 const COOKIES_FB_INSTA = path.join(COOKIES_DIR, "cookies_fbinsta");
-const COOKIES_YOUTUBE  = path.join(COOKIES_DIR, "cookies_youtube.txt");
 
-console.log(`🍪 Cookies dir: ${COOKIES_DIR}`);
+console.log(`Cookies dir: ${COOKIES_DIR}`);
 
 let serverInstance = null;
 
@@ -65,7 +68,7 @@ function sseWrite(res, data) {
 }
 
 /* ======================================================
-   SSE: PROGRESS  →  GET /progress
+   GET /progress
 ====================================================== */
 app.get("/progress", (req, res) => {
   res.setHeader("Content-Type",      "text/event-stream");
@@ -78,7 +81,6 @@ app.get("/progress", (req, res) => {
   sseWrite(res, "data: 0\n\n");
 
   const hb = setInterval(() => sseWrite(res, ": ping\n\n"), 15_000);
-
   req.on("close", () => {
     clearInterval(hb);
     if (app.locals.progressRes === res) app.locals.progressRes = null;
@@ -86,7 +88,7 @@ app.get("/progress", (req, res) => {
 });
 
 /* ======================================================
-   SSE: LOGS  →  GET /logs
+   GET /logs
 ====================================================== */
 app.get("/logs", (req, res) => {
   res.setHeader("Content-Type",      "text/event-stream");
@@ -99,7 +101,6 @@ app.get("/logs", (req, res) => {
   sseWrite(res, "data: coevas panel activated successfully! \\n\n\n");
 
   const hb = setInterval(() => sseWrite(res, ": ping\n\n"), 15_000);
-
   req.on("close", () => {
     clearInterval(hb);
     if (app.locals.logRes === res) app.locals.logRes = null;
@@ -107,7 +108,7 @@ app.get("/logs", (req, res) => {
 });
 
 /* ======================================================
-   CANCEL  →  POST /cancel
+   POST /cancel
 ====================================================== */
 app.post("/cancel", (req, res) => {
   app.locals.cancelRequested = true;
@@ -115,7 +116,7 @@ app.post("/cancel", (req, res) => {
 
   if (proc && !proc.killed) {
     try   { proc.kill("SIGTERM"); console.log("Process killed"); }
-    catch (e) { console.warn("⚠️ Kill failed:", e.message); }
+    catch (e) { console.warn("Kill failed:", e.message); }
   }
 
   if (app.locals.progressRes && !app.locals.progressRes.writableEnded) {
@@ -150,7 +151,7 @@ const isThreads           = (url) => { const u = normalize(url); return u.includ
 const isInstagramCarousel = (url) => { const u = normalize(url); return u.includes("instagram.com/p/") || u.includes("instagr.am/p/"); };
 
 /* ======================================================
-   YOUTUBE CODEC HELPERS
+   CODEC HELPERS
 ====================================================== */
 function codecRank(vcodec = "") {
   if (vcodec.startsWith("av01")) return 3;
@@ -167,22 +168,19 @@ function codecLabel(vcodec = "") {
 }
 
 /* ======================================================
-   GALLERY-DL: INSTAGRAM CAROUSEL DOWNLOADER
+   GALLERY-DL: INSTAGRAM CAROUSEL
 ====================================================== */
 function downloadInstagramCarousel(url, cookiesPath, res) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ig-carousel-"));
 
   const args = [
-    "--cookies", cookiesPath,
-    "--user-agent",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "-o", "extractor.instagram.videos=true",
-    "-d", tmpDir,
-    "--filename", "{username}_{id}_{num}.{extension}",
+    "--cookies",    cookiesPath,
+    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "-o",           "extractor.instagram.videos=true",
+    "-d",           tmpDir,
+    "--filename",   "{username}_{id}_{num}.{extension}",
     url
   ];
-
-  console.log("▶ gallery-dl carousel:", url);
 
   let stderr = "";
   let proc;
@@ -190,24 +188,21 @@ function downloadInstagramCarousel(url, cookiesPath, res) {
   try {
     proc = spawn("gallery-dl", args, { stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
-    console.error("gallery-dl spawn failed:", err);
     return sendJsonError(res, 500, "gallery-dl not available. Install: pip install gallery-dl");
   }
 
   const downloadedFiles = [];
 
   proc.stdout.on("data", (chunk) => {
-    const lines = chunk.toString().split("\n").map(l => l.trim()).filter(Boolean);
-    for (const line of lines) {
+    chunk.toString().split("\n").map(l => l.trim()).filter(Boolean).forEach(line => {
       if (fs.existsSync(line)) downloadedFiles.push(line);
-    }
+    });
   });
 
   proc.stderr.on("data", (d) => { stderr += d.toString(); });
 
   proc.on("close", (code) => {
     if (code !== 0 && downloadedFiles.length === 0) {
-      console.error("gallery-dl error (code", code, "):", stderr);
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       return sendJsonError(res, 500, `gallery-dl failed (exit ${code}): ${stderr.slice(0, 300)}`);
     }
@@ -232,8 +227,6 @@ function downloadInstagramCarousel(url, cookiesPath, res) {
       return sendJsonError(res, 404, "No media files found in carousel post");
     }
 
-    console.log(`gallery-dl: ${files.length} file(s) in ${tmpDir}`);
-
     return res.json({
       ok:    true,
       type:  "carousel",
@@ -248,14 +241,13 @@ function downloadInstagramCarousel(url, cookiesPath, res) {
   });
 
   proc.on("error", (err) => {
-    console.error("gallery-dl process error:", err);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     return sendJsonError(res, 500, "gallery-dl process error: " + err.message);
   });
 }
 
 /* ======================================================
-   /serve — stream a single carousel file to browser
+   GET /serve
 ====================================================== */
 app.get("/serve", (req, res) => {
   const rawPath = decodeURIComponent(req.query.file || "").trim();
@@ -268,7 +260,7 @@ app.get("/serve", (req, res) => {
   }
 
   let fileStat;
-  try { fileStat = statSync(rawPath); }
+  try   { fileStat = statSync(rawPath); }
   catch { return res.status(500).json({ ok: false, error: "Cannot stat file" }); }
 
   if (!fileStat.isFile()) {
@@ -284,7 +276,7 @@ app.get("/serve", (req, res) => {
   res.setHeader("Cache-Control",       "no-store");
 
   const stream = createReadStream(rawPath);
-  stream.on("error", (err) => { console.error("/serve stream error:", err); res.destroy(); });
+  stream.on("error", () => res.destroy());
   stream.pipe(res);
 
   res.on("finish", () => {
@@ -298,7 +290,7 @@ app.get("/serve", (req, res) => {
 });
 
 /* ======================================================
-   DOWNLOAD ROUTE
+   POST /download
 ====================================================== */
 app.post("/download", async (req, res) => {
   const { url, quality, allowAV1 = false, mode = "video" } = req.body || {};
@@ -307,15 +299,20 @@ app.post("/download", async (req, res) => {
   if (!validateDownloadUrl(url)) return sendJsonError(res, 400, "Invalid URL");
 
   try {
-    if (isYouTube(url))   return await downloadYouTube({ url, quality, allowAV1, mode }, res, app, COOKIES_YOUTUBE);
-    if (isFacebook(url))  return await downloadFacebook({ url, mode }, res, app, COOKIES_FB_INSTA);
+    if (isYouTube(url))
+      return await downloadYouTube({ url, quality, allowAV1, mode }, res, app);
+
+    if (isFacebook(url))
+      return await downloadFacebook({ url, mode }, res, app, COOKIES_FB_INSTA);
 
     if (isInstagram(url)) {
-      if (isInstagramCarousel(url)) return downloadInstagramCarousel(url, COOKIES_FB_INSTA, res);
+      if (isInstagramCarousel(url))
+        return downloadInstagramCarousel(url, COOKIES_FB_INSTA, res);
       return await downloadInstagram({ url, mode }, res, app, COOKIES_FB_INSTA);
     }
 
-    if (isThreads(url)) return await downloadThreads({ url, mode }, res, app, COOKIES_FB_INSTA);
+    if (isThreads(url))
+      return await downloadThreads({ url, mode }, res, app, COOKIES_FB_INSTA);
 
     return sendJsonError(res, 400, "Unsupported platform");
 
@@ -326,15 +323,75 @@ app.post("/download", async (req, res) => {
 });
 
 /* ======================================================
-   INFO ROUTE
+   INFO PROBE HELPER
+   Never throws — always returns parsed object or null
+====================================================== */
+const INFO_CLIENTS = ["tv_embedded", "web", "ios", "android", "mweb", "web_creator"];
+
+function probeInfo(client, url, useCookies = true) {
+  return new Promise((resolve) => {
+    let stdout = "";
+
+    let proc;
+    try {
+      proc = useCookies
+        ? spawnYtDlpProbe(client, ["-J", url])
+        : spawnYtDlpProbeNoCookies(client, ["-J", url]);
+    } catch (e) {
+      console.error(`[Info/${client}] spawn error:`, e.message);
+      return resolve(null);
+    }
+
+    if (!proc) return resolve(null);
+
+    proc.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+
+    proc.stderr.on("data", (chunk) => {
+      chunk.toString().split("\n").filter(Boolean).forEach(line =>
+        console.warn(`[Info/${client}${useCookies ? "" : "/no-cookies"}]`, line)
+      );
+    });
+
+    proc.on("error", (err) => {
+      console.error(`[Info/${client}] process error:`, err.message);
+      resolve(null);
+    });
+
+    proc.on("close", () => {
+      if (!stdout || stdout.trim().length === 0) {
+        console.log(`[Info/${client}] no stdout — skipping`);
+        return resolve(null);
+      }
+
+      // Debug: show what yt-dlp actually returned
+      console.log(`[Info/${client}] stdout preview: ${stdout.trim().slice(0, 120)}`);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(stdout);
+      } catch {
+        console.log(`[Info/${client}] JSON parse failed — skipping`);
+        return resolve(null);
+      }
+
+      if (!parsed || !parsed.id) {
+        console.log(`[Info/${client}] no valid id — skipping (got: ${JSON.stringify(parsed)?.slice(0, 80)})`);
+        return resolve(null);
+      }
+
+      resolve(parsed);
+    });
+  });
+}
+
+/* ======================================================
+   POST /info
 ====================================================== */
 app.post("/info", async (req, res) => {
   const { url } = req.body || {};
   if (!url) return sendJsonError(res, 400, "URL required");
 
-  /* ======================
-     META (IG / FB / Threads)
-  ====================== */
+  /* ── Non-YouTube ── */
   if (!isYouTube(url)) {
     let type    = "unknown";
     let handler = "yt-dlp";
@@ -365,159 +422,133 @@ app.post("/info", async (req, res) => {
     });
   }
 
-  /* ======================
-     YOUTUBE — full format probe
-  ====================== */
-  const args = ["-J", url];
-  let stdout  = "";
-  let stderr  = "";
-  let proc;
+  /* ── YouTube: Round 1 — with cookies ── */
+  let info = null;
 
-  try {
-    proc = startYtDlpInfo(args, { stdio: ["ignore", "pipe", "pipe"] });
-  } catch (e) {
-    console.error("yt-dlp spawn error:", e);
-    return sendJsonError(res, 500, "yt-dlp not available: " + e.message);
+  console.log("[Info] Round 1: probing with cookies...");
+  for (const client of INFO_CLIENTS) {
+    console.log(`[Info] Trying client: ${client}`);
+    info = await probeInfo(client, url, true);
+    if (info) {
+      console.log(`[Info] Success with client: ${client}`);
+      break;
+    }
+    console.log(`[Info] ✗ ${client} failed — trying next`);
   }
 
-  proc.stdout.on("data", (d) => { stdout += d.toString(); });
-  proc.stderr.on("data", (d) => {
-    stderr += d.toString();
-    console.warn("[yt-dlp stderr]", d.toString().trim());
-  });
-
-  proc.on("error", (err) => {
-    console.error("yt-dlp process error:", err);
-    return sendJsonError(res, 500, "yt-dlp process error: " + err.message);
-  });
-
-  proc.on("close", (code) => {
-    if (!stdout || stdout.trim().length === 0) {
-      console.error(`yt-dlp returned no output. Exit: ${code}`);
-      return sendJsonError(
-        res, 500,
-        `yt-dlp returned no data (exit ${code}). ` +
-        "Video may be private, age-restricted, or yt-dlp needs updating.\n" +
-        stderr.slice(0, 300)
-      );
-    }
-
-    let info;
-    try {
-      info = JSON.parse(stdout);
-    } catch (e) {
-      console.error("Info JSON parse failed:", e.message);
-      return sendJsonError(res, 500, "Failed to parse yt-dlp output: " + e.message);
-    }
-
-    if (!info) {
-      return sendJsonError(res, 500, "yt-dlp returned null info object");
-    }
-
-    if (!info.formats && !info.url) {
-      return sendJsonError(
-        res, 500,
-        "No formats found. Video may be private, DRM-protected, or login required."
-      );
-    }
-
-    const formats = Array.isArray(info.formats) ? info.formats : [];
-
-    // ── STEP 1: adaptive video-only streams ─────────────
-    let videoFormats = formats.filter(f =>
-      f.height &&
-      f.vcodec &&
-      f.vcodec !== "none" &&
-      (!f.acodec || f.acodec === "none")
-    );
-
-    // ── STEP 2: fallback to muxed streams ───────────────
-    if (videoFormats.length === 0) {
-      videoFormats = formats.filter(f =>
-        f.height &&
-        f.vcodec &&
-        f.vcodec !== "none"
-      );
-    }
-
-    const duration = Number(info.duration) || 0;
-
-    // ── bestByHeight (AV1 included) ─────────────────────
-    const bestByHeightAV1 = {};
-    for (const f of videoFormats) {
-      const h    = f.height;
-      const rank = codecRank(f.vcodec);
-      if (
-        !bestByHeightAV1[h] ||
-        rank > codecRank(bestByHeightAV1[h].vcodec) ||
-        (rank === codecRank(bestByHeightAV1[h].vcodec) &&
-          (f.tbr || 0) > (bestByHeightAV1[h].tbr || 0))
-      ) {
-        bestByHeightAV1[h] = f;
+  /* ── YouTube: Round 2 — without cookies ── */
+  if (!info) {
+    console.log("[Info] Round 2: retrying WITHOUT cookies (stale cookie check)...");
+    for (const client of INFO_CLIENTS) {
+      console.log(`[Info] Trying client (no-cookies): ${client}`);
+      info = await probeInfo(client, url, false);
+      if (info) {
+        console.log(`[Info] Success (no-cookies) with client: ${client}`);
+        console.warn("[Info] ⚠ Cookie-less probe succeeded — cookies_youtube.txt may be expired");
+        break;
       }
+      console.log(`[Info] ✗ ${client} (no-cookies) failed — trying next`);
     }
+  }
 
-    // ── bestByHeight (AV1 excluded) ─────────────────────
-    const noAV1Formats = videoFormats.filter(f => !f.vcodec.startsWith("av01"));
-    const bestByHeightNoAV1 = {};
-    for (const f of noAV1Formats) {
-      const h    = f.height;
-      const rank = codecRank(f.vcodec);
-      if (
-        !bestByHeightNoAV1[h] ||
-        rank > codecRank(bestByHeightNoAV1[h].vcodec) ||
-        (rank === codecRank(bestByHeightNoAV1[h].vcodec) &&
-          (f.tbr || 0) > (bestByHeightNoAV1[h].tbr || 0))
-      ) {
-        bestByHeightNoAV1[h] = f;
-      }
-    }
-
-    const heights      = Object.keys(bestByHeightAV1).map(Number).sort((a, b) => a - b);
-    const maxHeight    = heights.length ? Math.max(...heights) : null;
-    const bestFmtAV1   = maxHeight ? bestByHeightAV1[maxHeight]   : null;
-    const bestFmtNoAV1 = maxHeight ? bestByHeightNoAV1[maxHeight] : null;
-
-    // ── Size map ─────────────────────────────────────────
-    const sizeByHeight = {};
-    for (const [h, f] of Object.entries(bestByHeightAV1)) {
-      const size =
-        f.filesize ||
-        f.filesize_approx ||
-        (f.tbr && duration ? Math.round((f.tbr * 1000 / 8) * duration) : null);
-      if (size) sizeByHeight[Number(h)] = size;
-    }
-
-    // ── H.264-only heights ──────────────────────────────
-    const h264Heights = [...new Set(
-      formats
-        .filter(f => f.height && (f.vcodec || "").startsWith("avc1"))
-        .map(f => f.height)
-    )].sort((a, b) => a - b);
-
-    const bestCodecAV1  = bestFmtAV1   ? codecLabel(bestFmtAV1.vcodec)   : "H.264";
-    const bestCodec     = bestFmtNoAV1 ? codecLabel(bestFmtNoAV1.vcodec) : "H.264";
-
-    const codecByHeight = {};
-    for (const h of heights) {
-      const f = bestByHeightNoAV1[h];
-      codecByHeight[h] = f ? codecLabel(f.vcodec) : "H.264";
-    }
-
+  /* ── All probes exhausted — graceful degradation ── */
+  if (!info) {
+    console.warn("[Info] All clients exhausted — returning degraded response");
     return res.json({
       ok:               true,
       platform:         "youtube",
-      title:            info.title     || null,
-      thumbnail:        info.thumbnail || null,
-      maxHeight,
-      bestCodecAV1,
-      bestCodec,
-      codec:            bestCodec,
-      codecByHeight,
-      availableHeights: heights,
-      h264Heights,
-      sizeByHeight
+      degraded:         true,
+      title:            null,
+      thumbnail:        null,
+      maxHeight:        null,
+      bestCodecAV1:     "Unknown",
+      bestCodec:        "Unknown",
+      codec:            "Unknown",
+      codecByHeight:    {},
+      availableHeights: [],
+      h264Heights:      [],
+      sizeByHeight:     {},
+      note: "Format info unavailable — download will still be attempted automatically"
     });
+  }
+
+  /* ── Parse formats ── */
+  const formats  = Array.isArray(info.formats) ? info.formats : [];
+  const duration = Number(info.duration) || 0;
+
+  let videoFormats = formats.filter(f =>
+    f.height &&
+    f.vcodec && f.vcodec !== "none" &&
+    (!f.acodec || f.acodec === "none")
+  );
+
+  if (videoFormats.length === 0) {
+    videoFormats = formats.filter(f =>
+      f.height && f.vcodec && f.vcodec !== "none"
+    );
+  }
+
+  const bestByHeightAV1 = {};
+  for (const f of videoFormats) {
+    const h = f.height, rank = codecRank(f.vcodec), prev = bestByHeightAV1[h];
+    if (!prev || rank > codecRank(prev.vcodec) ||
+        (rank === codecRank(prev.vcodec) && (f.tbr || 0) > (prev.tbr || 0))) {
+      bestByHeightAV1[h] = f;
+    }
+  }
+
+  const bestByHeightNoAV1 = {};
+  for (const f of videoFormats.filter(f => !f.vcodec.startsWith("av01"))) {
+    const h = f.height, rank = codecRank(f.vcodec), prev = bestByHeightNoAV1[h];
+    if (!prev || rank > codecRank(prev.vcodec) ||
+        (rank === codecRank(prev.vcodec) && (f.tbr || 0) > (prev.tbr || 0))) {
+      bestByHeightNoAV1[h] = f;
+    }
+  }
+
+  const heights      = Object.keys(bestByHeightAV1).map(Number).sort((a, b) => a - b);
+  const maxHeight    = heights.length ? Math.max(...heights) : null;
+  const bestFmtAV1   = maxHeight ? bestByHeightAV1[maxHeight]   : null;
+  const bestFmtNoAV1 = maxHeight ? bestByHeightNoAV1[maxHeight] : null;
+
+  const sizeByHeight = {};
+  for (const [h, f] of Object.entries(bestByHeightAV1)) {
+    const size =
+      f.filesize ||
+      f.filesize_approx ||
+      (f.tbr && duration ? Math.round((f.tbr * 1000 / 8) * duration) : null);
+    if (size) sizeByHeight[Number(h)] = size;
+  }
+
+  const h264Heights = [...new Set(
+    formats
+      .filter(f => f.height && (f.vcodec || "").startsWith("avc1"))
+      .map(f => f.height)
+  )].sort((a, b) => a - b);
+
+  const bestCodecAV1 = bestFmtAV1   ? codecLabel(bestFmtAV1.vcodec)   : "H.264";
+  const bestCodec    = bestFmtNoAV1 ? codecLabel(bestFmtNoAV1.vcodec) : "H.264";
+
+  const codecByHeight = {};
+  for (const h of heights) {
+    const f = bestByHeightNoAV1[h];
+    codecByHeight[h] = f ? codecLabel(f.vcodec) : "H.264";
+  }
+
+  return res.json({
+    ok:               true,
+    platform:         "youtube",
+    degraded:         false,
+    title:            info.title     || null,
+    thumbnail:        info.thumbnail || null,
+    maxHeight,
+    bestCodecAV1,
+    bestCodec,
+    codec:            bestCodec,
+    codecByHeight,
+    availableHeights: heights,
+    h264Heights,
+    sizeByHeight
   });
 });
 
@@ -527,7 +558,7 @@ app.post("/info", async (req, res) => {
 export function startServer(port = DEFAULT_PORT) {
   if (serverInstance) return serverInstance;
   serverInstance = app.listen(port, () => {
-    console.log(`✅ Server running at http://localhost:${port}`);
+    console.log(`Server running at http://localhost:${port}`);
   });
   return serverInstance;
 }

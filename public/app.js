@@ -355,7 +355,7 @@ async function probeSource(url) {
   if (fileInfo) fileInfo.style.display = "none";
   hideCarouselNote();
   disableDownload(true);
-  setStatus("Analyzing source…", "info");
+  setStatus("Analyzing system requirements…", "info");
 
   const { type } = detectPlatform(url);
 
@@ -475,7 +475,7 @@ async function probeSource(url) {
     }
   }
 
-  const noteMsg = data.note ? `${data.note}` : "Source analyzed";
+  const noteMsg = data.note ? `${data.note}` : "Analyzed";
   setStatus(noteMsg, "success");
 
   if (fileInfo) fileInfo.style.display = "block";

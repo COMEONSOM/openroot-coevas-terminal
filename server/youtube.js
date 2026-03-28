@@ -1,224 +1,324 @@
-// youtube.js — Resilient Adaptive Media Extraction Engine
+// youtube.js — Never-Fail Adaptive Media Extraction Engine
 import path from "path";
 import os   from "os";
 import fs   from "fs";
 import { spawnYtDlp } from "./utils/runYtDlp.js";
-import { FFMPEG_BIN }  from "./utils/binaryManager.js";
 import { sendLog }     from "./utils/logStream.js";
 
+
+
 /* ======================================================
-   CLIENT ORDER
-   tv_embedded → full adaptive (4K VP9) ← primary
-   web         → full adaptive           ← fallback 1
-   ios         → muxed only              ← fallback 2
-   android     → full adaptive           ← fallback 3
+   STRATEGY CONSTANTS
 ====================================================== */
 const CLIENTS     = ["tv_embedded", "web", "ios", "android"];
-const RESOLUTIONS = [4320, 2160, 1440, 1080, 720, 480, 0];
+const RESOLUTIONS = [4320, 2160, 1440, 1080, 720, 480, 360, 0];
 
-/* ======================================================
-   FORMAT SELECTOR
-   Includes muxed fallback for ios client
-====================================================== */
-function buildFormatSelector(height) {
-  if (!height) return "bestvideo+bestaudio/bestvideo/best";
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// FIX #1 — buildFormatTiers now accepts allowAV1
+//
+// When allowAV1 = false → every video filter gets
+// [vcodec!^=av01] so yt-dlp CANNOT pick AV1 even if it
+// is the only format available at that resolution.
+//
+// When allowAV1 = true → no codec filter, yt-dlp picks
+// freely (AV1 > VP9 > H.264 by bitrate efficiency).
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function buildFormatTiers(height, allowAV1 = true) {
+  const noAV1 = allowAV1 ? "" : "[vcodec!^=av01]";
+
+  if (!height) return [
+    `bv*${noAV1}+ba`,
+    `bv*${noAV1}+ba/b${noAV1}`,
+    `b${noAV1}`,
+  ];
+
   return [
-    `bestvideo[height<=${height}]+bestaudio`,  // adaptive with cap    ← tv_embedded/web/android
-    `best[height<=${height}]`,                 // muxed with cap       ← ios
-    `bestvideo[height<=1080]+bestaudio`,        // adaptive 1080p       ← downgraded player
-    `best[height<=1080]`,                       // muxed 1080p          ← ios downgraded
-    `bestvideo+bestaudio`,                      // any adaptive
-    `best`                                      // absolute last resort
-  ].join("/");
+    `bv*${noAV1}[height<=${height}]+ba`,
+    `b${noAV1}[height<=${height}]`,
+    `bv*${noAV1}+ba`,
+    `b${noAV1}`,
+  ];
 }
 
-function buildSortStr(codecSort) {
-  return `res,${codecSort},br`;
-}
+
 
 /* ======================================================
    ERROR CLASSIFIER
 ====================================================== */
 function classifyError(stderr = "", code) {
-  if (stderr.includes("Requested format is not available"))  return "FORMAT_UNAVAILABLE";
+  if (stderr.includes("Requested format is not available")) return "FORMAT_UNAVAILABLE";
   if (stderr.includes("Sign in to confirm") ||
-      stderr.includes("age-restricted"))                     return "AUTH_REQUIRED";
+      stderr.includes("age-restricted"))                    return "AUTH_REQUIRED";
   if (stderr.includes("Private video") ||
-      stderr.includes("removed"))                            return "VIDEO_UNAVAILABLE";
+      stderr.includes("removed"))                           return "VIDEO_UNAVAILABLE";
   if (stderr.includes("HTTP Error 429") ||
-      stderr.includes("Too Many Requests"))                  return "RATE_LIMITED";
+      stderr.includes("Too Many Requests"))                 return "RATE_LIMITED";
   if (stderr.includes("Unable to extract") ||
-      stderr.includes("extraction"))                         return "EXTRACTION_FAILED";
-  if (code === 1)                                            return "GENERIC_FAILURE";
+      stderr.includes("extraction"))                        return "EXTRACTION_FAILED";
+  if (code === 1)                                           return "GENERIC_FAILURE";
   return "UNKNOWN";
 }
 
+
+
 /* ======================================================
-   SINGLE VIDEO ATTEMPT
+   FILE UTILITIES
 ====================================================== */
-function attemptDownload({ client, height, codecSort, url, cookiesPath, tmpDir, app }) {
+function collectOutputFiles(tmpDir) {
+  try {
+    return fs.readdirSync(tmpDir)
+      .filter(f => !f.endsWith(".part") && !f.endsWith(".ytdl"))
+      .map(f => path.join(tmpDir, f))
+      .filter(f => fs.statSync(f).isFile())
+      .sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
+  } catch {
+    return [];
+  }
+}
+
+function pickBestFile(files, isAudio) {
+  if (isAudio) {
+    return files.find(f => f.endsWith(".mp3")) ||
+           files.find(f => f.endsWith(".m4a")) ||
+           files[0] || null;
+  }
+  return files.find(f => f.endsWith(".mp4"))  ||
+         files.find(f => f.endsWith(".webm")) ||
+         files[0] || null;
+}
+
+function isValidFile(file) {
+  try {
+    return !!file && fs.existsSync(file) && fs.statSync(file).size > 1024;
+  } catch {
+    return false;
+  }
+}
+
+
+
+/* ======================================================
+   CORE SPAWNER
+====================================================== */
+function spawnAttempt({ client, formatStr, extraArgs, url, tmpDir, app, isAudio }) {
   return new Promise((resolve, reject) => {
-    const outTmpl = path.join(tmpDir, "%(title).80s [%(resolution)s] [%(id)s].%(ext)s");
+    const outTmpl = isAudio
+      ? path.join(tmpDir, "%(title).80s [%(id)s].%(ext)s")
+      : path.join(tmpDir, "%(title).80s [%(resolution)s] [%(id)s].%(ext)s");
 
     const args = [
       "--newline", "--progress",
       "--no-playlist", "--no-config",
-      "-f",  buildFormatSelector(height),
-      "-S",  buildSortStr(codecSort),
+      "-f", formatStr,
       "--merge-output-format", "mp4",
-      "--ffmpeg-location", FFMPEG_BIN,
+      "-o", outTmpl,
+      ...extraArgs,
+      url
     ];
 
-    if (cookiesPath && fs.existsSync(cookiesPath)) {
-      args.push("--cookies", cookiesPath);
-    }
+    let stderr  = "";
+    let settled = false;
 
-    args.push("-o", outTmpl, url);
-
-    let stderr = "";
     const proc = spawnYtDlp(client, args);
     if (!proc) return reject({ type: "SPAWN_FAILED", message: "Failed to spawn yt-dlp" });
 
-    proc.stdout.on("data", (chunk) => {
+    app.locals.currentProc = proc;
+
+    proc.stdout.on("data", chunk => {
       chunk.toString().split("\n").filter(Boolean).forEach(line => {
         sendLog(app, line);
-        const match = line.match(/\[download\]\s+([\d.]+)%/);
-        if (match) {
+        const m = line.match(/\[download\]\s+([\d.]+)%/);
+        if (m) {
           const pr = app.locals.progressRes;
           if (pr && !pr.writableEnded) {
-            pr.write(`data: ${parseFloat(match[1])}\n\n`);
+            pr.write(`data: ${parseFloat(m[1])}\n\n`);
             if (typeof pr.flush === "function") pr.flush();
           }
         }
       });
     });
 
-    proc.stderr.on("data", (chunk) => {
+    proc.stderr.on("data", chunk => {
       chunk.toString().split("\n").filter(Boolean).forEach(line => {
         if (
-          line.includes("frame=")    || line.includes("fps=")  ||
-          line.includes("time=")     || line.includes("bitrate=") ||
-          line.includes("speed=")    || line.includes("Deno") ||
-          line.includes("nsig")      || line.includes("EJS") ||
-          line.includes("Extracting")|| line.includes("JS player")
+          line.includes("frame=")     || line.includes("fps=")   ||
+          line.includes("time=")      || line.includes("bitrate=") ||
+          line.includes("speed=")     || line.includes("Deno")   ||
+          line.includes("nsig")       || line.includes("EJS")    ||
+          line.includes("Extracting") || line.includes("JS player")
         ) return;
         stderr += line + "\n";
         sendLog(app, `⚠ ${line}`);
       });
     });
 
-    proc.on("error", (err) => reject({ type: "SPAWN_FAILED", message: err.message }));
+    proc.on("error", err => reject({ type: "SPAWN_FAILED", message: err.message }));
 
-    proc.on("close", (code) => {
+    proc.on("close", code => {
+      if (settled) return;
+      settled = true;
       app.locals.currentProc = null;
 
       if (app.locals.cancelRequested) return reject({ type: "CANCELLED" });
-      if (code !== 0) return reject({ type: classifyError(stderr, code), message: stderr.slice(0, 300), code });
 
-      let files = [];
-      try {
-        files = fs.readdirSync(tmpDir)
-          .filter(f => !f.endsWith(".part") && !f.endsWith(".ytdl"))
-          .map(f => path.join(tmpDir, f))
-          .filter(f => fs.statSync(f).isFile());
-      } catch {}
+      const file = pickBestFile(collectOutputFiles(tmpDir), isAudio);
+      if (isValidFile(file)) return resolve(file);
 
-      const file =
-        files.find(f => f.endsWith(".mp4"))  ||
-        files.find(f => f.endsWith(".webm")) ||
-        files[0];
-
-      if (!file) return reject({ type: "NO_OUTPUT", message: "No output file found" });
-      resolve(file);
+      reject({ type: classifyError(stderr, code), message: stderr.slice(0, 300), code });
     });
-
-    app.locals.currentProc = proc;
   });
 }
+
+
 
 /* ======================================================
-   SINGLE AUDIO ATTEMPT
+   VIDEO STRATEGY ENGINE
+   FIX #2 — allowAV1 accepted and passed to buildFormatTiers
 ====================================================== */
-function attemptAudio({ client, url, cookiesPath, tmpDir, app }) {
-  return new Promise((resolve, reject) => {
-    const outTmpl = path.join(tmpDir, "%(title).80s [%(id)s].%(ext)s");
-    const args = [
-      "--newline", "--progress",
-      "--no-playlist", "--no-config",
-      "-f",              "ba/b",
-      "-x",
-      "--audio-format",  "mp3",
-      "--audio-quality", "0",
-      "--ffmpeg-location", FFMPEG_BIN,
-    ];
+async function runVideoStrategies({ url, targetHeight, allowAV1, tmpDir, app }) {
+  for (const client of CLIENTS) {
+    if (app.locals.cancelRequested) return null;
 
-    if (cookiesPath && fs.existsSync(cookiesPath)) args.push("--cookies", cookiesPath);
-    args.push("-o", outTmpl, url);
+    const resLadder = targetHeight
+      ? RESOLUTIONS.filter(r => r === 0 || r <= targetHeight)
+      : [0];
 
-    let stderr = "";
-    const proc = spawnYtDlp(client, args);
-    if (!proc) return reject({ type: "SPAWN_FAILED" });
+    for (const height of resLadder) {
+      if (app.locals.cancelRequested) return null;
 
-    proc.stdout.on("data", (chunk) => {
-      chunk.toString().split("\n").filter(Boolean).forEach(line => {
-        sendLog(app, line);
-        const match = line.match(/\[download\]\s+([\d.]+)%/);
-        if (match) {
-          const pr = app.locals.progressRes;
-          if (pr && !pr.writableEnded) {
-            pr.write(`data: ${parseFloat(match[1])}\n\n`);
-            if (typeof pr.flush === "function") pr.flush();
+      const label = height ? `${height}p` : "Best";
+      // ↓ allowAV1 now flows into every format string
+      const tiers = buildFormatTiers(height, allowAV1);
+
+      for (const formatStr of tiers) {
+        if (app.locals.cancelRequested) return null;
+
+        sendLog(app, `Trying [${client}] ${label} | -f "${formatStr}"`);
+
+        try {
+          const file = await spawnAttempt({
+            client, formatStr,
+            extraArgs: [],
+            url, tmpDir, app, isAudio: false
+          });
+
+          if (isValidFile(file)) {
+            sendLog(app, `Success: [${client}] ${label} | -f "${formatStr}"`);
+            return file;
           }
+        } catch (err) {
+          if (err.type === "CANCELLED")         return null;
+          if (err.type === "VIDEO_UNAVAILABLE") return "VIDEO_UNAVAILABLE";
+          if (err.type === "AUTH_REQUIRED") {
+            sendLog(app, "Login required — add cookies_youtube.txt to ~/.coevas/");
+          }
+          if (err.type === "RATE_LIMITED") {
+            sendLog(app, "Rate limited — waiting 3s...");
+            await sleep(3000);
+          }
+          sendLog(app, `↩ [${client}] ${label} "${formatStr}" → ${err.type}`);
         }
-      });
-    });
+      }
+      sendLog(app, `↓ [${client}] All tiers failed at ${label} — stepping down`);
+    }
+    sendLog(app, `⟶ [${client}] exhausted — trying next client`);
+  }
 
-    proc.stderr.on("data", d => { stderr += d.toString(); });
-    proc.on("error", err => reject({ type: "SPAWN_FAILED", message: err.message }));
-
-    proc.on("close", (code) => {
-      if (app.locals.cancelRequested) return reject({ type: "CANCELLED" });
-      if (code !== 0) return reject({ type: classifyError(stderr, code), message: stderr.slice(0, 300) });
-
-      let files = [];
-      try {
-        files = fs.readdirSync(tmpDir)
-          .filter(f => !f.endsWith(".part") && !f.endsWith(".ytdl"))
-          .map(f => path.join(tmpDir, f))
-          .filter(f => fs.statSync(f).isFile());
-      } catch {}
-
-      const file =
-        files.find(f => f.endsWith(".mp3")) ||
-        files.find(f => f.endsWith(".m4a")) ||
-        files[0];
-
-      if (!file) return reject({ type: "NO_OUTPUT" });
-      resolve(file);
-    });
-
-    app.locals.currentProc = proc;
-  });
+  return null;
 }
+
+
+
+/* ======================================================
+   AUDIO STRATEGY ENGINE (unchanged)
+====================================================== */
+async function runAudioStrategies({ url, tmpDir, app }) {
+  const audioFormats = ["ba", "ba/b", "b"];
+
+  for (const client of CLIENTS) {
+    if (app.locals.cancelRequested) return null;
+
+    for (const formatStr of audioFormats) {
+      if (app.locals.cancelRequested) return null;
+
+      sendLog(app, `Trying audio [${client}] | -f "${formatStr}"`);
+
+      try {
+        const file = await spawnAttempt({
+          client, formatStr,
+          extraArgs: ["-x", "--audio-format", "mp3", "--audio-quality", "0"],
+          url, tmpDir, app, isAudio: true
+        });
+
+        if (isValidFile(file)) {
+          sendLog(app, `Audio success: [${client}] -f "${formatStr}"`);
+          return file;
+        }
+      } catch (err) {
+        if (err.type === "CANCELLED")         return null;
+        if (err.type === "VIDEO_UNAVAILABLE") return "VIDEO_UNAVAILABLE";
+        if (err.type === "RATE_LIMITED") {
+          sendLog(app, "Rate limited — waiting 3s...");
+          await sleep(3000);
+        }
+        sendLog(app, `↩ Audio [${client}] "${formatStr}" → ${err.type}`);
+      }
+    }
+    sendLog(app, `⟶ Audio [${client}] exhausted — trying next client`);
+  }
+
+  return null;
+}
+
+
+
+/* ======================================================
+   NUCLEAR FALLBACK
+   Note: nuclear never uses AV1 filter — it's last resort
+   and we just want SOMETHING to succeed.
+====================================================== */
+async function runNuclearFallback({ url, tmpDir, app }) {
+  sendLog(app, "☢ Nuclear fallback — simplest possible args, web client");
+
+  const nuclearFormats = ["b", "bv*+ba", "worst"];
+
+  for (const formatStr of nuclearFormats) {
+    if (app.locals.cancelRequested) return null;
+
+    try {
+      const file = await spawnAttempt({
+        client: "web", formatStr,
+        extraArgs: [],
+        url, tmpDir, app, isAudio: false
+      });
+
+      if (isValidFile(file)) {
+        sendLog(app, `Nuclear fallback succeeded with -f "${formatStr}"`);
+        return file;
+      }
+    } catch (err) {
+      if (err.type === "CANCELLED")         return null;
+      if (err.type === "VIDEO_UNAVAILABLE") return "VIDEO_UNAVAILABLE";
+      sendLog(app, `☢ Nuclear "${formatStr}" → ${err.type}`);
+    }
+  }
+
+  return null;
+}
+
+
 
 /* ======================================================
    MAIN EXPORT
 ====================================================== */
-export async function downloadYouTube({ url, quality, allowAV1, mode }, res, app, cookiesPath) {
+export async function downloadYouTube({ url, quality, allowAV1, mode }, res, app) {
   const isAudio = mode === "audio";
   const tmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), "yt-"));
-
   app.locals.cancelRequested = false;
 
-  /* ── Codec preference ── */
-  const forceH264 = String(quality).startsWith("h264-");
-  let codecSort;
-  if (forceH264)     codecSort = "codec:h264";
-  else if (allowAV1) codecSort = "codec:av1:vp9:h264";
-  else               codecSort = "codec:vp9:h264";
-
-  /* ── Target height ── */
   let targetHeight = null;
+  const forceH264  = String(quality).startsWith("h264-");
   if (forceH264) {
     const p = parseInt(String(quality).replace("h264-", ""), 10);
     if (!isNaN(p) && p > 0) targetHeight = p;
@@ -227,96 +327,53 @@ export async function downloadYouTube({ url, quality, allowAV1, mode }, res, app
     if (!isNaN(p) && p > 0) targetHeight = p;
   }
 
-  /* ── Resolution ladder ── */
-  const resLadder = targetHeight
-    ? RESOLUTIONS.filter(r => r === 0 || r <= targetHeight)
-    : [0];
-
   sendLog(app, `▶ Starting YouTube ${isAudio ? "audio" : "video"} download`);
-  sendLog(app, `Target: ${targetHeight ? targetHeight + "p" : "Best"} | Codec: ${codecSort}`);
+  sendLog(app, `Target: ${targetHeight ? targetHeight + "p" : "Best"} | AV1: ${allowAV1 ? "allowed" : "blocked"}`);
 
-  /* ======================================================
-     AUDIO — client rotation
-  ====================================================== */
+  let resultFile = null;
+
   if (isAudio) {
-    for (const client of CLIENTS) {
-      if (app.locals.cancelRequested) break;
-      sendLog(app, `Trying client: ${client}`);
-      try {
-        const file = await attemptAudio({ client, url, cookiesPath, tmpDir, app });
-        finishProgress(app);
-        return streamFile(file, tmpDir, true, res, app);
-      } catch (err) {
-        if (err.type === "CANCELLED")        break;
-        if (err.type === "VIDEO_UNAVAILABLE") break;
-        sendLog(app, `[${client}] failed: ${err.type}`);
+    resultFile = await runAudioStrategies({ url, tmpDir, app });
+  } else {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // FIX #3 — allowAV1 finally passed into the engine
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    resultFile = await runVideoStrategies({ url, targetHeight, allowAV1, tmpDir, app });
+
+    if (!resultFile || resultFile === "VIDEO_UNAVAILABLE") {
+      if (resultFile !== "VIDEO_UNAVAILABLE") {
+        resultFile = await runNuclearFallback({ url, tmpDir, app });
       }
     }
+  }
 
+  /* ── CANCELLED ── */
+  if (app.locals.cancelRequested) {
+    sendLog(app, "Download cancelled");
     safeCleanup(tmpDir);
-    finishProgress(app);
-    if (!res.headersSent)
-      return res.status(500).json({ ok: false, error: "Audio download failed on all strategies" });
     return;
   }
 
-  /* ======================================================
-     VIDEO — client × resolution strategy matrix
-  ====================================================== */
-  for (const client of CLIENTS) {
-    if (app.locals.cancelRequested) break;
-
-    for (const height of resLadder) {
-      if (app.locals.cancelRequested) break;
-
-      const label = height ? `${height}p` : "Best";
-      sendLog(app, `Trying ${label} via [${client}]...`);
-
-      try {
-        const file = await attemptDownload({
-          client, height, codecSort, url, cookiesPath, tmpDir, app
-        });
-
-        sendLog(app, `Success: ${label} via [${client}]`);
-        finishProgress(app);
-        return streamFile(file, tmpDir, false, res, app);
-
-      } catch (err) {
-        if (err.type === "CANCELLED") {
-          sendLog(app, "Download cancelled");
-          safeCleanup(tmpDir);
-          return;
-        }
-
-        if (err.type === "VIDEO_UNAVAILABLE") {
-          sendLog(app, "Video unavailable or removed");
-          safeCleanup(tmpDir);
-          finishProgress(app);
-          if (!res.headersSent)
-            return res.status(404).json({ ok: false, error: "Video unavailable or removed" });
-          return;
-        }
-
-        if (err.type === "AUTH_REQUIRED") {
-          sendLog(app, "Login required — add cookies_youtube.txt to ~/.coevas/");
-        }
-
-        if (err.type === "RATE_LIMITED") {
-          sendLog(app, "Rate limited — waiting 3s...");
-          await sleep(3000);
-        }
-
-        sendLog(app, `${label} [${client}] → ${err.type} — next strategy`);
-      }
-    }
-
-    sendLog(app, `Switching from [${client}] → next client`);
+  /* ── VIDEO UNAVAILABLE ── */
+  if (resultFile === "VIDEO_UNAVAILABLE") {
+    sendLog(app, "Video unavailable or removed");
+    safeCleanup(tmpDir);
+    finishProgress(app);
+    if (!res.headersSent)
+      return res.status(404).json({ ok: false, error: "Video unavailable or removed" });
+    return;
   }
 
-  /* ── All strategies exhausted ── */
+  /* ── SUCCESS ── */
+  if (isValidFile(resultFile)) {
+    finishProgress(app);
+    return streamFile(resultFile, tmpDir, isAudio, res, app);
+  }
+
+  /* ── ALL EXHAUSTED ── */
   safeCleanup(tmpDir);
   finishProgress(app);
-  sendLog(app, "All strategies exhausted");
+  sendLog(app, "All strategies exhausted — giving up");
 
   if (!res.headersSent)
     return res.status(500).json({
@@ -324,6 +381,8 @@ export async function downloadYouTube({ url, quality, allowAV1, mode }, res, app
       error: "Download failed on all strategies. Video may be restricted or unavailable."
     });
 }
+
+
 
 /* ======================================================
    HELPERS
@@ -336,7 +395,7 @@ function streamFile(file, tmpDir, isAudio, res, app) {
     ? "audio/mpeg"
     : ext === ".webm" ? "video/webm" : "video/mp4";
 
-  sendLog(app, `Done: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
+  sendLog(app, `Streaming: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
 
   if (res.headersSent) { safeCleanup(tmpDir); return; }
 
@@ -350,7 +409,7 @@ function streamFile(file, tmpDir, isAudio, res, app) {
   stream.pipe(res);
   res.on("finish", () => {
     safeCleanup(tmpDir);
-    sendLog(app, "Cleaned up");
+    sendLog(app, "Cleaned up temp files");
   });
 }
 
