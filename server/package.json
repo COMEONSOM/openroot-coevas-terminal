@@ -1,6 +1,6 @@
 {
   "name": "coevas-downloader-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Coevas Terminal — Embedded Express Server",
   "author": "Openroot Systems",
   "type": "module",
