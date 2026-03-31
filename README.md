@@ -1,221 +1,244 @@
-# ================================
-# COEVAS PERSONAL DEV HANDBOOK
-# ================================
-# Future me — read this before touching anything.
+# Coevas Terminal — Developer Handbook
 
+This document serves as the official development and deployment guide for the Coevas Terminal desktop application.
 
-# ------------------------------------------------
-# PROJECT: Coevas-Panel-Openroot (Electron App)
-# ------------------------------------------------
+---
 
+## Project Overview
 
-## 🛠️ Tech Stack
+**Product Name:** Coevas Terminal  
+**Organization:** Openroot Systems  
+**Type:** Electron-based desktop application  
 
-Electron        – Desktop app shell
-Node.js         – Runtime
-Express         – Embedded backend server (runs inside the app)
-yt-dlp          – Video downloader engine
-ffmpeg          – Media merging / processing
-gallery-dl      – Instagram/Threads carousel downloader
-JavaScript ESM  – Modern JS modules (import/export everywhere)
-SSE             – Server-Sent Events for live progress + logs
+Coevas Terminal is a standalone Windows desktop application built using Electron. It provides a unified interface for advanced media downloading operations across multiple platforms.
 
+---
 
-## 📁 Project Structure
+## Core Architecture
 
-coevas-panel-openroot/       ← ROOT (run everything from here)
+Coevas Terminal is powered by an internal processing system referred to as the **Coevas Panel**.
+
+### What is Coevas Panel?
+
+Coevas Panel is not the application itself. It is the **internal processing architecture and strategy layer** responsible for handling complex media operations.
+It coordinates multiple tools and workflows to ensure reliable and efficient downloading.
+
+### Responsibilities of Coevas Panel
+
+- Managing multiple download pipelines  
+- Handling platform-specific extraction logic  
+- Coordinating media processing and merging  
+- Managing fallback strategies across different sources  
+- Ensuring stability across different content types  
+
+In simple terms:
+
+- **Coevas Terminal** → User-facing desktop application  
+- **Coevas Panel** → Internal processing engine powering the application  
+
+---
+
+## Technology Stack
+
+- Electron (Desktop application framework)  
+- Node.js (Runtime environment)  
+- Express (Embedded backend server)  
+- yt-dlp (Primary media downloading engine)  
+- ffmpeg (Media processing and merging)  
+- gallery-dl (Instagram and Threads downloader)  
+- JavaScript (ES Modules)  
+- Server-Sent Events (SSE) for live logs and progress  
+
+---
+
+## Project Structure
+
+```
+openroot-coevas-terminal/
+│
 ├── electron/
-│   ├── main.js              ← Electron entry point
+│   ├── main.js
 │   └── preload.js
+│
 ├── server/
-│   ├── server.js            ← Express backend
+│   ├── server.js
 │   ├── youtube.js
 │   ├── instagram.js
 │   ├── facebook.js
 │   ├── threads.js
 │   └── utils/
+│
 ├── public/
 │   ├── index.html
 │   ├── style.css
 │   ├── app.js
 │   └── assets/
-├── package.json             ← ROOT package.json (controls everything)
-└── dist/                    ← Built .exe output goes here
+│
+├── package.json
+└── dist/
+```
 
+---
 
-## 📦 System Requirements
+## System Requirements
 
-Install these globally on your machine (not npm — system-level):
+Install the following dependencies at the system level:
 
-  yt-dlp      → https://github.com/yt-dlp/yt-dlp/releases
-  ffmpeg      → https://ffmpeg.org/download.html
-  gallery-dl  → pip install gallery-dl
-  Node.js     → https://nodejs.org (LTS version)
+- Node.js (LTS): https://nodejs.org  
+- yt-dlp: https://github.com/yt-dlp/yt-dlp/releases  
+- ffmpeg: https://ffmpeg.org/download.html  
+- gallery-dl:
+  ```bash
+  pip install gallery-dl
+  ```
 
-Verify everything works:
+### Verification
 
-  node --version
-  yt-dlp --version
-  ffmpeg -version
-  gallery-dl --version
+```bash
+node --version
+yt-dlp --version
+ffmpeg -version
+gallery-dl --version
+```
 
+---
 
-## ▶️ Development (Running Locally)
+## Development Setup
 
-ALWAYS run from the ROOT folder, not from electron/ or server/:
+Always run commands from the project root directory.
 
-  cd C:\Users\aryan\.antigravity\coevas-panel-openroot
-  npm start
+```bash
+cd <project-root>
+npm start
+```
 
-This opens the Electron desktop app in dev mode.
-It reads your source files live — every save reflects instantly.
-Runs on: http://localhost:3000 internally.
+This launches Coevas Terminal in development mode.
 
-To test in browser only (no Electron):
+- Development server runs on: `http://localhost:3000`  
+- Source files are loaded dynamically  
 
-  cd server
-  npm install      ← only needed first time
-  node server.js
-  → Open http://localhost:3000 in browser
+---
 
+## Development vs Production Behavior
 
-## ⚠️ IMPORTANT: Dev vs Production Port Behaviour
+| Mode        | Port   | Behavior |
+|------------|--------|----------|
+| Development | 3000   | Uses live source files |
+| Production  | 39281  | Uses bundled build |
 
-The app uses DIFFERENT ports in dev vs prod to avoid conflicts:
+If conflicts occur:
 
-  npm start (dev)   → port 3000   reads your SOURCE files live
-  Built .exe (prod) → port 39281  reads FROZEN bundled resources
+```bash
+taskkill /F /IM node.exe
+```
 
-WHY THIS MATTERS:
-If you run npm start AND open the built .exe at the same time,
-previously the .exe would steal the dev server on port 3000 and
-show your latest source changes instead of the frozen build.
-This is now fixed — they use different ports and never conflict.
+---
 
-If you ever see the .exe showing wrong/live content:
-  taskkill /F /IM node.exe
-Then reopen the .exe. (Kill the dev node process that was squatting port 39281.)
+## Build Process
 
+```bash
+npm run build
+```
 
-## 🏗️ Building the Installer (.exe)
+### Output
 
-When everything works in dev, build the installer:
+- `dist/CoevasTerminalSetup.exe`  
+- `dist/win-unpacked/`  
 
-  cd C:\Users\aryan\.antigravity\coevas-panel-openroot
-  npm run build
+### Important
 
-Output:
-  dist/CoevasTerminalSetup.exe   ← installer to distribute
-  dist/win-unpacked/             ← unpackaged version (test without installing)
+The built application is fully bundled. Any source changes require rebuilding.
 
-⚠️ If the build fails with permission errors:
-  1. Close terminal
-  2. Open PowerShell as Administrator (right-click → Run as Administrator)
-  3. cd C:\Users\aryan\.antigravity\coevas-panel-openroot
-  4. npm run build
+---
 
+## Version Control Workflow
 
-## 🔒 Built .exe is Completely Frozen
+```bash
+git add .
+git commit -m "vX.X.X - description"
+git tag vX.X.X
+npm run build
+```
 
-After building, the .exe bundles everything inside:
-  resources/server/    ← frozen copy of server/ at build time
-  resources/public/    ← frozen copy of public/ at build time
+To revert:
 
-Changing your source files AFTER building does NOTHING to the installed app.
-You must rebuild (npm run build) to update the installed version.
+```bash
+git checkout vX.X.X
+npm run build
+```
 
-This means:
-  Source change → reflected in:  npm start  ✅
-  Source change → NOT reflected: installed .exe  ✅ (this is correct behaviour)
+---
 
+## Uninstallation
 
-## 🗂️ Version Control (Do This Before Every Build)
+Remove via Windows Settings → Apps.
 
-  git add .
-  git commit -m "v1.x.x — describe what changed"
-  git tag v1.x.x
-  npm run build
+Then delete residual files:
 
-If you break something later:
-  git checkout v1.x.x   ← jump back to working version
-  npm run build         ← rebuild clean exe from that snapshot
+```
+%LocalAppData%\Programs\
+%AppData%\
+```
 
-Keep old .exe files renamed with version numbers:
-  CoevasTerminal-v1.0.0-Setup.exe
-  CoevasTerminal-v1.1.0-Setup.exe
+---
 
+## Distribution Workflow
 
-## 🔄 Uninstall Old Version Before Reinstalling
+1. Build the installer  
+2. Rename with version  
+3. Upload to GitHub Releases  
+4. Update website links  
 
-1. Windows key → Settings → Apps → Installed apps
-2. Find: Coevas Terminal → Uninstall
+---
 
-Clean leftover files:
-  Windows + R → %LocalAppData%\Programs → delete Coevas Terminal folder
-  Windows + R → %AppData%              → delete any Coevas folder
+## Fresh Setup After Cloning
 
+Download required binaries manually:
 
-## 🚀 Distribution Workflow
+- yt-dlp  
+- ffmpeg  
+- ffprobe  
 
-  1. npm run build
-  2. Rename: dist/CoevasTerminalSetup.exe → CoevasTerminal-vX.X.X-Setup.exe
-  3. Upload to Google Drive
-  4. Update download link in website script.js:
+Then:
 
-     {
-       version: "1.x.x",
-       date: "2026-XX-XX",
-       driveViewLink: "https://drive.google.com/file/d/XXXX/view?usp=sharing"
-     }
+```bash
+cd server && npm install
+cd ..
+npm start
+```
 
-## 🔧 After Cloning (Fresh Setup)
+---
 
-These are NOT in the repo (too large). Download manually:
+## Website Development
 
-server/yt-dlp.exe    → https://github.com/yt-dlp/yt-dlp/releases/latest
-server/ffmpeg.exe    → https://ffmpeg.org/download.html
-server/ffprobe.exe   → (same ffmpeg download, extract both)
+```bash
+npx http-server .
+```
 
-Then from root:
-  cd server && npm install
-  cd .. && npm start
+Disable cache:
 
+```bash
+npx http-server -c-1 .
+```
 
-# ------------------------------------------------
-# PROJECT: Coevas-Systems-Openroot (Website)
-# ------------------------------------------------
+---
 
+## Obfuscation Workflow
 
-## ▶️ Run Locally
+```bash
+npm run obfuscate:site
+```
 
-  npx http-server .        ← serves current folder at http://localhost:8080
+Only commit `script.obf.js`, never raw `script.js`.
 
-  npx http-server -c-1 .  ← same but with cache DISABLED (use this while developing)
-                             -c-1 means: no caching, always fresh files
+---
 
-Access on same network:
-  http://127.0.0.1:8080     ← your machine
-  http://10.x.x.x:8080      ← other devices on same WiFi
+## Notes
 
-If you see different styling on different IPs → just a cache issue.
-Fix: Ctrl + Shift + R (hard refresh) or use -c-1 flag above.
+- Coevas Terminal is the product  
+- Coevas Panel is the internal processing system  
+- Maintain clear separation between user-facing branding and internal architecture  
 
+---
 
-## 🔐 Obfuscation Workflow
-
-Edit script.js openly. Never upload raw script.js to GitHub.
-Always obfuscate first, then deploy script.obf.js.
-
-One-time setup (already done):
-  npm install
-
-Obfuscate command:
-  npm run obfuscate:site
-
-This reads script.js and outputs script.obf.js automatically.
-
-Full workflow every release:
-  1. Edit script.js
-  2. npm run obfuscate:site
-  3. Commit + push (script.obf.js goes to GitHub, not script.js)
-  4. GitHub Pages serves script.obf.js ✅
+**Maintained by Openroot Systems**
