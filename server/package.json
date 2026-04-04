@@ -1,10 +1,18 @@
 {
   "name": "coevas-downloader-server",
   "version": "1.2.0",
-  "description": "Coevas Terminal — Embedded Express Server",
-  "author": "Openroot Systems",
+  "description": "Coevas Terminal — Embedded Express API Server by Openroot Systems",
+  "author": {
+    "name": "Openroot Systems",
+    "email": "connect.openroot@gmail.com",
+    "url": "https://openroot.in/"
+  },
   "type": "module",
   "private": true,
+
+  "engines": {
+    "node": ">=18.0.0"
+  },
 
   "scripts": {
     "start": "node server.js"

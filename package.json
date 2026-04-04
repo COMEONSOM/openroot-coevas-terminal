@@ -1,8 +1,12 @@
 {
   "name": "coevas-panel-openroot",
   "version": "1.2.0",
-  "description": "Coevas Terminal — 8K Media Downloader",
-  "author": "Openroot Systems",
+  "description": "Coevas Terminal — 8K Media Downloader by Openroot Systems",
+  "author": {
+    "name": "Openroot Systems",
+    "email": "connect.openroot@gmail.com",
+    "url": "https://openroot.in/"
+  },
   "type": "module",
   "main": "electron/main.js",
 
@@ -21,10 +25,18 @@
   "build": {
     "appId": "com.openroot.coevas",
     "productName": "Coevas Terminal",
-    "copyright": "© 2026 Openroot Systems",
+    "copyright": "© 2026 Openroot Systems. All rights reserved.",
+    "buildVersion": "1.2.0",
+
+    "asar": true,
+    "asarUnpack": [
+      "server/bin/**/*",
+      "**/*.{node,dll,exe}"
+    ],
 
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
 
     "files": [
@@ -40,10 +52,26 @@
     ],
 
     "win": {
-      "target": "nsis",
-      "artifactName": "CoevasTerminalSetup.exe",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "artifactName": "CoevasTerminalSetup-${version}.exe",
       "icon": "public/assets/company-icon.ico",
-      "legalTrademarks": "Openroot Systems"
+      "legalTrademarks": "Coevas Terminal™ is a registered trademark of Openroot Systems",
+
+      "publisherName": "Openroot Systems",
+      "executableName": "CoevasTerminal",
+      "fileDescription": "Coevas Terminal — 8K Media Downloader",
+
+      "requestedExecutionLevel": "asInvoker",
+
+      "certificateFile": "./certs/openroot.pfx",
+      "certificatePassword": "OpenrootCert2026",
+      "signingHashAlgorithms": ["sha256"],
+      "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+
+      "signAndEditExecutable": true,
+      "signDlls": false
     },
 
     "nsis": {
@@ -52,9 +80,23 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Coevas Terminal",
+
       "installerIcon": "public/assets/company-icon.ico",
       "uninstallerIcon": "public/assets/company-icon.ico",
-      "installerHeaderIcon": "public/assets/company-icon.ico"
+      "installerHeaderIcon": "public/assets/company-icon.ico",
+
+      "uninstallDisplayName": "Coevas Terminal ${version} by Openroot Systems",
+
+      "welcomeTitle": "Welcome to Coevas Terminal Setup",
+      "welcomeFinishText": "Coevas Terminal has been installed.\n\nLaunch the app to start downloading in 8K quality.",
+
+      "displayLanguageSelector": false,
+      "multiLanguageInstaller": false,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "menuCategory": "Openroot Systems",
+
+      "artifactName": "CoevasTerminalSetup-${version}.exe"
     }
   }
 }

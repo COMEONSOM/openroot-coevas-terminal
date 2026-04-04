@@ -12,7 +12,12 @@ export function validateDownloadUrl(
     "threads.net",
     "www.threads.net",
     "threads.com",
-    "www.threads.com"
+    "www.threads.com",
+    "terabox.com",
+    "teraboxapp.com",
+    "www.teraboxapp.com",  // covers the exact domain from your screenshot
+    "1024tera.com",
+    "terabox.app"
   ]
 ) {
   try {

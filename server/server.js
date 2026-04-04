@@ -1,24 +1,25 @@
 // ======================================================
-// server.js — FINAL SERVER (PRODUCTION READY)
+// server.js — COEVAS PANEL (PRODUCTION READY)
 // ======================================================
 
-import express         from "express";
-import path            from "path";
+import express           from "express";
+import path              from "path";
 import { fileURLToPath } from "url";
-import rateLimit       from "express-rate-limit";
-import { spawn }       from "child_process";
+import rateLimit         from "express-rate-limit";
+import { spawn }         from "child_process";
 import fs, {
   createReadStream,
   existsSync,
   statSync
-}                      from "fs";
-import os              from "os";
-import mime            from "mime-types";
+}                        from "fs";
+import os                from "os";
+import mime              from "mime-types";
 
 import { downloadYouTube }     from "./youtube.js";
 import { downloadInstagram }   from "./instagram.js";
 import { downloadFacebook }    from "./facebook.js";
 import { downloadThreads }     from "./threads.js";
+import { handleTerabox }       from "./terabox.js";
 import { validateDownloadUrl } from "./utils/validateUrl.js";
 import {
   spawnYtDlpProbe,
@@ -32,7 +33,17 @@ const app          = express();
 const DEFAULT_PORT = Number(process.env.PORT) || 3000;
 
 /* ======================================================
-   COOKIES
+   COOKIES DIR
+   ─────────────────────────────────────────────────────
+   Resolves to Electron userData on every OS:
+     Windows : %APPDATA%\<appName>      (via COEVAS_USER_DATA)
+     macOS   : ~/Library/Application Support/<appName>
+     Linux   : ~/.config/<appName>
+
+   Cookies are stored here permanently — they survive
+   app updates and work on any machine after a build.
+   Users import cookies once via the UI; the app handles
+   the rest. No manual file copying required.
 ====================================================== */
 const COOKIES_DIR = process.env.COEVAS_USER_DATA
   || path.join(os.homedir(), ".coevas");
@@ -41,16 +52,19 @@ if (!fs.existsSync(COOKIES_DIR)) {
   fs.mkdirSync(COOKIES_DIR, { recursive: true });
 }
 
-const COOKIES_FB_INSTA = path.join(COOKIES_DIR, "cookies_fbinsta");
+const COOKIES_FB_INSTA = path.join(COOKIES_DIR, "cookies_fbinsta.txt");
+const COOKIES_TERABOX  = path.join(COOKIES_DIR, "cookies_terabox.txt");
 
-console.log(`Cookies dir: ${COOKIES_DIR}`);
+console.log(`[Coevas]   Cookies dir  : ${COOKIES_DIR}`);
+console.log(`[Terabox]  Cookies      : ${fs.existsSync(COOKIES_TERABOX)  ? "found ✓" : "not found — unauthenticated mode"}`);
+console.log(`[FB/Insta] Cookies      : ${fs.existsSync(COOKIES_FB_INSTA) ? "found ✓" : "not found"}`);
 
 let serverInstance = null;
 
 /* ======================================================
    MIDDLEWARE
 ====================================================== */
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "4mb" }));  // 4 MB — enough for any cookies file
 app.use(express.static(path.join(__dirname, "../public")));
 
 const limiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
@@ -149,6 +163,12 @@ const isFacebook          = (url) => normalize(url).includes("facebook.com")  ||
 const isInstagram         = (url) => normalize(url).includes("instagram.com") || normalize(url).includes("instagr.am");
 const isThreads           = (url) => { const u = normalize(url); return u.includes("threads.net") || u.includes("threads.com"); };
 const isInstagramCarousel = (url) => { const u = normalize(url); return u.includes("instagram.com/p/") || u.includes("instagr.am/p/"); };
+const isTerabox           = (url) => { const u = normalize(url); return (
+  u.includes("teraboxapp.com") ||
+  u.includes("terabox.app")    ||
+  u.includes("terabox.com")    ||
+  u.includes("1024tera.com")
+); };
 
 /* ======================================================
    CODEC HELPERS
@@ -290,6 +310,135 @@ app.get("/serve", (req, res) => {
 });
 
 /* ======================================================
+   COOKIES MANAGEMENT
+   ─────────────────────────────────────────────────────
+   Three routes let the Electron frontend manage cookie
+   files without touching the filesystem directly.
+   All cookies are stored inside COOKIES_DIR (userData),
+   which is persistent, build-safe, and cross-machine.
+
+   Typical frontend flow:
+     1. User clicks "Import Cookies" in Settings
+     2. Electron opens a file picker (dialog.showOpenDialog)
+     3. Main process reads the file → sends content here
+     4. POST /cookies/import validates & saves to userData
+     5. GET /cookies/status confirms it's loaded
+
+   Electron main.js IPC example:
+     ipcMain.handle("import-cookies", async (e, platform) => {
+       const { filePaths, canceled } = await dialog.showOpenDialog({
+         title:   `Select ${platform} cookies.txt`,
+         filters: [{ name: "Cookies", extensions: ["txt"] }],
+       });
+       if (canceled || !filePaths.length) return { ok: false };
+       const content = fs.readFileSync(filePaths[0], "utf8");
+       const r = await fetch("http://localhost:3000/cookies/import", {
+         method:  "POST",
+         headers: { "Content-Type": "application/json" },
+         body:    JSON.stringify({ platform, content }),
+       });
+       return r.json();
+     });
+====================================================== */
+
+/**
+ * GET /cookies/status
+ * Returns which cookie files exist in userData.
+ */
+app.get("/cookies/status", (req, res) => {
+  return res.json({
+    ok: true,
+    cookies: {
+      terabox: fs.existsSync(COOKIES_TERABOX),
+      fbinsta: fs.existsSync(COOKIES_FB_INSTA),
+    },
+    cookiesDir: COOKIES_DIR,
+  });
+});
+
+/**
+ * POST /cookies/import
+ * Body: { platform: "terabox" | "fbinsta", content: "<raw Netscape text>" }
+ *
+ * Validates the content is a proper Netscape cookies file,
+ * then writes it to the correct file inside COOKIES_DIR.
+ */
+app.post("/cookies/import", (req, res) => {
+  const { platform, content } = req.body || {};
+
+  if (!platform || !content) {
+    return sendJsonError(res, 400, "Both platform and content are required");
+  }
+
+  const SUPPORTED = { terabox: COOKIES_TERABOX, fbinsta: COOKIES_FB_INSTA };
+  const targetPath = SUPPORTED[platform];
+
+  if (!targetPath) {
+    return sendJsonError(res, 400, `Unknown platform "${platform}". Supported: terabox, fbinsta`);
+  }
+
+  // Validate Netscape cookie format
+  const trimmed   = content.trim();
+  const lines     = trimmed.split("\n").map(l => l.trim()).filter(Boolean);
+  const dataLines = lines.filter(l => !l.startsWith("#"));
+
+  if (dataLines.length === 0) {
+    return sendJsonError(res, 400, "Cookie file appears empty — no data lines found");
+  }
+
+  const validLine = dataLines.find(l => l.split("\t").length >= 7);
+  if (!validLine) {
+    return sendJsonError(
+      res, 400,
+      "Invalid format — expected Netscape cookies.txt (tab-separated, 7 fields per line). " +
+      "Export using a browser extension like 'Get cookies.txt LOCALLY'."
+    );
+  }
+
+  try {
+    fs.writeFileSync(targetPath, trimmed + "\n", "utf8");
+    console.log(`[Cookies] Imported ${platform} → ${targetPath} (${dataLines.length} entries)`);
+
+    return res.json({
+      ok:      true,
+      platform,
+      entries: dataLines.length,
+      savedTo: targetPath,
+      message: `${platform} cookies imported (${dataLines.length} entries)`,
+    });
+  } catch (err) {
+    console.error("[Cookies] Write error:", err.message);
+    return sendJsonError(res, 500, "Failed to save cookie file: " + err.message);
+  }
+});
+
+/**
+ * DELETE /cookies/:platform
+ * Removes the cookie file for the given platform from userData.
+ */
+app.delete("/cookies/:platform", (req, res) => {
+  const { platform } = req.params;
+  const SUPPORTED    = { terabox: COOKIES_TERABOX, fbinsta: COOKIES_FB_INSTA };
+  const targetPath   = SUPPORTED[platform];
+
+  if (!targetPath) {
+    return sendJsonError(res, 400, `Unknown platform "${platform}"`);
+  }
+
+  if (!fs.existsSync(targetPath)) {
+    return res.json({ ok: true, message: `No ${platform} cookies to remove` });
+  }
+
+  try {
+    fs.unlinkSync(targetPath);
+    console.log(`[Cookies] Removed ${platform} cookies`);
+    return res.json({ ok: true, message: `${platform} cookies removed` });
+  } catch (err) {
+    return sendJsonError(res, 500, "Failed to remove cookie file: " + err.message);
+  }
+});
+
+/* ======================================================
    POST /download
 ====================================================== */
 app.post("/download", async (req, res) => {
@@ -314,7 +463,24 @@ app.post("/download", async (req, res) => {
     if (isThreads(url))
       return await downloadThreads({ url, mode }, res, app, COOKIES_FB_INSTA);
 
-    return sendJsonError(res, 400, "Unsupported platform");
+    if (isTerabox(url)) {
+      const result = await handleTerabox(url, COOKIES_TERABOX);
+
+      if (!result.success) {
+        return sendJsonError(res, 500, result.error || "Terabox download failed");
+      }
+
+      return res.json({
+        ok:       true,
+        platform: "terabox",
+        type:     "files",
+        count:    result.count,
+        files:    result.files,
+        tmpDir:   result.tmpDir,
+      });
+    }
+
+    return sendJsonError(res, 400, "Unsupported platform — YouTube, Instagram, Facebook, Threads, Terabox only");
 
   } catch (e) {
     console.error("Download error:", e);
@@ -324,7 +490,6 @@ app.post("/download", async (req, res) => {
 
 /* ======================================================
    INFO PROBE HELPER
-   Never throws — always returns parsed object or null
 ====================================================== */
 const INFO_CLIENTS = ["tv_embedded", "web", "ios", "android", "mweb", "web_creator"];
 
@@ -363,7 +528,6 @@ function probeInfo(client, url, useCookies = true) {
         return resolve(null);
       }
 
-      // Debug: show what yt-dlp actually returned
       console.log(`[Info/${client}] stdout preview: ${stdout.trim().slice(0, 120)}`);
 
       let parsed;
@@ -403,6 +567,18 @@ app.post("/info", async (req, res) => {
     } else if (u.includes("/p/") || u.includes("/post/")) {
       type    = (isInstagram(url) || isThreads(url)) ? "carousel" : "video";
       handler = (isInstagram(url) || isThreads(url)) ? "gallery-dl" : "yt-dlp";
+    }
+
+    if (isTerabox(url)) {
+      return res.json({
+        ok:       true,
+        platform: "terabox",
+        type:     "file-list",
+        handler:  "internal-api",
+        note: fs.existsSync(COOKIES_TERABOX)
+          ? "Authenticated — cookies_terabox loaded ✓"
+          : "Public shared files only — import cookies via Settings for private links",
+      });
     }
 
     return res.json({
@@ -558,7 +734,7 @@ app.post("/info", async (req, res) => {
 export function startServer(port = DEFAULT_PORT) {
   if (serverInstance) return serverInstance;
   serverInstance = app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+    console.log(`[Coevas] Server running at http://localhost:${port}`);
   });
   return serverInstance;
 }

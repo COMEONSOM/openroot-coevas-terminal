@@ -3,6 +3,7 @@
 // PRODUCTION BUILD — All platforms + full error handling
 // =====================================================
 
+
 const btn              = document.getElementById("download");
 const cancelBtn        = document.getElementById("cancel");
 const status           = document.getElementById("status");
@@ -36,21 +37,37 @@ let probeDebounceTimer = null;
 const qualityRow    = qualitySelect?.closest(".field")  || qualitySelect?.parentElement;
 const av1ToggleWrap = maxQualityToggle?.closest(".toggle") || maxQualityToggle?.parentElement;
 
+
 /* =====================================================
    PLATFORM DETECT
 ===================================================== */
 function detectPlatform(url) {
   const u = (url || "").toLowerCase();
+
   if (u.includes("youtube.com")   || u.includes("youtu.be"))
     return { name: "YouTube",   icon: "/icons/youtube.svg",   type: "youtube" };
+
   if (u.includes("facebook.com")  || u.includes("fb.watch"))
     return { name: "Facebook",  icon: "/icons/facebook.svg",  type: "meta" };
+
   if (u.includes("instagram.com") || u.includes("instagr.am"))
     return { name: "Instagram", icon: "/icons/instagram.svg", type: "meta" };
+
   if (u.includes("threads.net")   || u.includes("threads.com"))
     return { name: "Threads",   icon: "/icons/threads.svg",   type: "meta" };
-  return { name: "Paste a link", icon: "/icons/default.svg",  type: "unknown" };
+
+  // ✅ matches all Terabox domains — same order as server.js
+  if (
+    u.includes("teraboxapp.com") ||
+    u.includes("terabox.app")    ||
+    u.includes("terabox.com")    ||
+    u.includes("1024tera.com")
+  )
+    return { name: "Terabox", icon: "/icons/terabox.svg", type: "terabox" };
+
+  return { name: "Paste a link", icon: "/icons/default.svg", type: "unknown" };
 }
+
 
 /* =====================================================
    META TYPE DETECT
@@ -63,6 +80,7 @@ function detectMetaType(url) {
   return "unknown";
 }
 
+
 /* =====================================================
    IS THREADS?
 ===================================================== */
@@ -70,6 +88,7 @@ function isThreadsUrl(url) {
   const u = (url || "").toLowerCase();
   return u.includes("threads.net") || u.includes("threads.com");
 }
+
 
 /* =====================================================
    MODE DROPDOWN CONTROL
@@ -85,9 +104,13 @@ function updateModeOptions() {
     opt.style.opacity = "1";
   }
 
-  if (type === "youtube") {
+  // Terabox treated like YouTube — no carousel mode
+  if (type === "youtube" || type === "terabox") {
     for (const opt of modeSelect.options) {
-      if (opt.value === "carousel") { opt.disabled = true; opt.style.opacity = "0.4"; }
+      if (opt.value === "carousel") {
+        opt.disabled      = true;
+        opt.style.opacity = "0.4";
+      }
     }
     if (modeSelect.value === "carousel") modeSelect.value = "video";
     return;
@@ -98,7 +121,10 @@ function updateModeOptions() {
 
     if (metaType === "video") {
       for (const opt of modeSelect.options) {
-        if (opt.value === "carousel") { opt.disabled = true; opt.style.opacity = "0.4"; }
+        if (opt.value === "carousel") {
+          opt.disabled      = true;
+          opt.style.opacity = "0.4";
+        }
       }
       if (modeSelect.value === "carousel") modeSelect.value = "video";
       return;
@@ -107,7 +133,8 @@ function updateModeOptions() {
     if (metaType === "carousel") {
       for (const opt of modeSelect.options) {
         if (opt.value === "video" || opt.value === "audio") {
-          opt.disabled = true; opt.style.opacity = "0.4";
+          opt.disabled      = true;
+          opt.style.opacity = "0.4";
         }
       }
       modeSelect.value = "carousel";
@@ -118,8 +145,9 @@ function updateModeOptions() {
   }
 }
 
+
 /* =====================================================
-   AUDIO / VIDEO UI SYNC  ✅ UPDATED — reflects selected quality
+   AUDIO / VIDEO UI SYNC — reflects selected quality
 ===================================================== */
 function syncModeUI() {
   const mode    = modeSelect?.value || "video";
@@ -147,19 +175,16 @@ function syncModeUI() {
       let displayHeight, displayCodec;
 
       if (selectedVal.startsWith("h264-")) {
-        // H.264 compat forced selection
         displayHeight = parseInt(selectedVal.replace("h264-", ""), 10);
         displayCodec  = "H.264";
 
       } else if (selectedVal === "best" || !selectedVal) {
-        // Best = max height + best available codec
         displayHeight = sourceInfo.maxHeight;
         displayCodec  = maxQualityToggle?.checked
           ? (sourceInfo.bestCodecAV1 || sourceInfo.bestCodec || "AV1")
           : (sourceInfo.bestCodec    || sourceInfo.codec     || "H.264");
 
       } else {
-        // Specific height e.g. "720"
         displayHeight = parseInt(selectedVal, 10);
         displayCodec  = maxQualityToggle?.checked
           ? (sourceInfo.bestCodecAV1 || "AV1")
@@ -175,6 +200,11 @@ function syncModeUI() {
       applyCodecBadge("gallery-dl");
       if (fileSize) fileSize.textContent = "Auto";
 
+    } else if (sourceInfo?.platform === "terabox") {
+      if (fileResolution) fileResolution.textContent = "Auto (Server provides)";
+      applyCodecBadge(sourceInfo.codec || "Auto");
+      if (fileSize) fileSize.textContent = sourceInfo.size || "Auto";
+
     } else if (sourceInfo) {
       if (fileResolution) fileResolution.textContent = "Auto (Highest)";
       applyCodecBadge(sourceInfo.codec || "Auto");
@@ -182,6 +212,7 @@ function syncModeUI() {
     }
   }
 }
+
 
 /* =====================================================
    UI HELPERS
@@ -210,10 +241,10 @@ function disableDownload(disabled, reason = "") {
 }
 
 function resetUI() {
-  isRunning              = false;
-  if (btn)      btn.style.display       = "block";
-  if (progress) progress.style.display  = "none";
-  if (cancelBtn) cancelBtn.style.display = "none";
+  isRunning = false;
+  if (btn)       btn.style.display        = "block";
+  if (progress)  progress.style.display   = "none";
+  if (cancelBtn) cancelBtn.style.display  = "none";
 
   if (progressSource) { progressSource.close(); progressSource = null; }
   if (logSource)      { logSource.close();      logSource      = null; }
@@ -225,6 +256,7 @@ function appendLog(line) {
   logsBox.scrollTop    = logsBox.scrollHeight;
 }
 
+
 /* =====================================================
    FORMAT BYTES
 ===================================================== */
@@ -235,6 +267,7 @@ function formatBytes(bytes) {
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return `${n.toFixed(2)} ${units[i]}`;
 }
+
 
 /* =====================================================
    FILENAME FROM CONTENT-DISPOSITION
@@ -250,6 +283,7 @@ function getFilenameFromResponse(response, fallback = "download") {
   } catch {}
   return fallback;
 }
+
 
 /* =====================================================
    CODEC BADGE
@@ -267,6 +301,7 @@ function applyCodecBadge(label) {
   );
 }
 
+
 /* =====================================================
    CAROUSEL NOTE
 ===================================================== */
@@ -281,6 +316,7 @@ function hideCarouselNote() {
   carouselNote.style.display = "none";
 }
 
+
 /* =====================================================
    INPUT HANDLER — debounced probe
 ===================================================== */
@@ -288,7 +324,7 @@ urlInput.addEventListener("input", () => {
   updatePlatformBadge();
   updateModeOptions();
 
-  if (fileInfo)  fileInfo.style.display = "none";
+  if (fileInfo) fileInfo.style.display = "none";
   hideCarouselNote();
 
   const url = urlInput.value.trim();
@@ -311,6 +347,7 @@ urlInput.addEventListener("input", () => {
   probeDebounceTimer = setTimeout(() => probeSource(url), 500);
 });
 
+
 /* =====================================================
    MODE CHANGE HANDLER
 ===================================================== */
@@ -323,8 +360,9 @@ if (modeSelect) {
   });
 }
 
+
 /* =====================================================
-   QUALITY CHANGE HANDLER  ✅ NEW — updates file info card
+   QUALITY CHANGE HANDLER — updates file info card
 ===================================================== */
 if (qualitySelect) {
   qualitySelect.addEventListener("change", () => {
@@ -333,19 +371,20 @@ if (qualitySelect) {
   });
 }
 
+
 /* =====================================================
-   AV1 TOGGLE HANDLER  ✅ NEW — updates codec badge
+   AV1 TOGGLE HANDLER — updates codec badge
 ===================================================== */
 if (maxQualityToggle) {
   maxQualityToggle.addEventListener("change", () => {
     if (!sourceInfo || modeSelect?.value !== "video") return;
     const selectedVal = qualitySelect?.value || "best";
-    // h264- forced selections ignore AV1 toggle — no update needed
     if (!selectedVal.startsWith("h264-")) {
       syncModeUI();
     }
   });
 }
+
 
 /* =====================================================
    SOURCE PROBE
@@ -355,12 +394,12 @@ async function probeSource(url) {
   if (fileInfo) fileInfo.style.display = "none";
   hideCarouselNote();
   disableDownload(true);
-  setStatus("Analyzing system requirements…", "info");
+  setStatus("Analyzing…", "info");
 
   const { type } = detectPlatform(url);
 
   if (type === "unknown") {
-    setStatus("Unsupported platform — YouTube, Instagram, Facebook, Threads only", "error");
+    setStatus("Unsupported platform — YouTube, Instagram, Facebook, Threads, Terabox only", "error");
     disableDownload(true);
     return;
   }
@@ -378,7 +417,6 @@ async function probeSource(url) {
     });
 
     clearTimeout(timeout);
-
     data = await res.json().catch(() => null);
 
     if (!res.ok || !data || data.ok === false) {
@@ -414,16 +452,16 @@ async function probeSource(url) {
     if (qualitySelect && data.availableHeights?.length) {
       qualitySelect.innerHTML = "";
 
-      const bestOpt   = document.createElement("option");
-      bestOpt.value   = "best";
-      bestOpt.text    = `Best (${maxH}p · ${codec})`;
+      const bestOpt = document.createElement("option");
+      bestOpt.value = "best";
+      bestOpt.text  = `Best (${maxH}p · ${codec})`;
       qualitySelect.appendChild(bestOpt);
 
       for (const h of [...data.availableHeights].reverse()) {
         if (h === maxH) continue;
-        const opt   = document.createElement("option");
-        opt.value   = String(h);
-        opt.text    = `${h}p`;
+        const opt = document.createElement("option");
+        opt.value = String(h);
+        opt.text  = `${h}p`;
         qualitySelect.appendChild(opt);
       }
 
@@ -445,7 +483,7 @@ async function probeSource(url) {
     }
 
   // ── Meta (Instagram / Facebook / Threads) ────────────
-  } else {
+  } else if (type === "meta") {
     if (qualitySelect) {
       qualitySelect.disabled      = true;
       qualitySelect.style.opacity = "0.5";
@@ -473,6 +511,17 @@ async function probeSource(url) {
         showCarouselNote("Threads post — video or images will be auto-detected");
       }
     }
+
+  // ── Terabox ──────────────────────────────────────────
+  } else if (type === "terabox") {
+    if (qualitySelect) {
+      qualitySelect.disabled      = true;
+      qualitySelect.style.opacity = "0.5";
+    }
+
+    if (fileResolution) fileResolution.textContent = "Auto (Server provides)";
+    applyCodecBadge(data.codec || "Auto");
+    if (fileSize) fileSize.textContent = data.size || "Auto";
   }
 
   const noteMsg = data.note ? `${data.note}` : "Analyzed";
@@ -483,6 +532,7 @@ async function probeSource(url) {
   syncModeUI();
   disableDownload(false);
 }
+
 
 /* =====================================================
    SSE: LOGS
@@ -511,15 +561,16 @@ function startLogs() {
   };
 }
 
+
 /* =====================================================
    SSE: PROGRESS
 ===================================================== */
 function openProgress() {
   if (progressSource) { progressSource.close(); progressSource = null; }
 
-  if (progress) progress.style.display  = "block";
-  if (bar)      bar.style.width         = "0%";
-  if (percentText) percentText.textContent = "0%";
+  if (progress)    progress.style.display     = "block";
+  if (bar)         bar.style.width            = "0%";
+  if (percentText) percentText.textContent    = "0%";
 
   progressSource = new EventSource("/progress");
 
@@ -534,8 +585,10 @@ function openProgress() {
   progressSource.onerror = () => {};
 }
 
+
 /* =====================================================
-   CAROUSEL DOWNLOAD HANDLER
+   CAROUSEL / MULTI-FILE DOWNLOAD HANDLER
+   Used for: Instagram carousel, Threads, Terabox files
 ===================================================== */
 async function handleCarouselResponse(data) {
   if (!data.files || data.files.length === 0) {
@@ -583,7 +636,7 @@ async function handleCarouselResponse(data) {
       if (i < total - 1) await new Promise(r => setTimeout(r, 700));
 
     } catch (err) {
-      console.error(`Carousel file error: ${f.name}`, err);
+      console.error(`File error: ${f.name}`, err);
       failed++;
     }
   }
@@ -599,6 +652,7 @@ async function handleCarouselResponse(data) {
   setStatus(msg, failed > 0 ? "info" : "success");
 }
 
+
 /* =====================================================
    CANCEL
 ===================================================== */
@@ -613,6 +667,7 @@ if (cancelBtn) {
     resetUI();
   };
 }
+
 
 /* =====================================================
    DOWNLOAD
@@ -637,15 +692,13 @@ btn.onclick = async () => {
   }
 
   isRunning = true;
-  if (btn)       btn.style.display       = "none";
-  if (cancelBtn) cancelBtn.style.display = "block";
+  if (btn)       btn.style.display        = "none";
+  if (cancelBtn) cancelBtn.style.display  = "block";
 
   const isCarousel = mode === "carousel";
 
   startLogs();
-  if (!isCarousel) {
-    openProgress();
-  }
+  if (!isCarousel) openProgress();
 
   setStatus(isCarousel ? "Downloading…" : "⬇ Starting download…", "info");
 
@@ -653,7 +706,7 @@ btn.onclick = async () => {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30 * 60 * 1000);
+    const timeout    = setTimeout(() => controller.abort(), 30 * 60 * 1000);
 
     let res;
     try {
@@ -682,19 +735,24 @@ btn.onclick = async () => {
     if (isJsonResp) {
       const data = await res.json();
 
-      if (!data.ok) {
-        throw new Error(data.error || "Download failed");
-      }
+      if (!data.ok) throw new Error(data.error || "Download failed");
 
+      // Instagram / Threads carousel
       if (data.type === "carousel" && data.files) {
-        setStatus(` ${data.count} media file(s) found`, "info");
+        setStatus(`${data.count} media file(s) found`, "info");
         await handleCarouselResponse(data);
+
+      // Terabox + any multi-file response
+      } else if (data.type === "files" && data.files) {
+        setStatus(`${data.count} file(s) found`, "info");
+        await handleCarouselResponse(data);
+
       } else {
         throw new Error(data.error || "Unexpected JSON response");
       }
 
     } else {
-      // ✅ Detect actual extension from Content-Type for correct filename
+      // Binary stream (YouTube / Facebook / Instagram single)
       const ct  = res.headers.get("Content-Type") || "";
       const ext = mode === "audio"
         ? "mp3"
@@ -718,14 +776,14 @@ btn.onclick = async () => {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 15000);
 
-      setStatus("Download complete", "success");
+      setStatus("Download complete ✓", "success");
     }
 
   } catch (err) {
     if (err.name === "AbortError") {
       setStatus("Request timed out", "error");
     } else {
-      setStatus("oops!" + (err.message || "Download failed"), "error");
+      setStatus("oops! " + (err.message || "Download failed"), "error");
     }
     console.error("Download error:", err);
 
@@ -733,6 +791,7 @@ btn.onclick = async () => {
     resetUI();
   }
 };
+
 
 /* =====================================================
    INIT

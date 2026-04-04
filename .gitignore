@@ -39,3 +39,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+certs/
+*.pfx
