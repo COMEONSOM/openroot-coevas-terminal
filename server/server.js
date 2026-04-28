@@ -1,7 +1,7 @@
 // ======================================================
 // server.js — COEVAS PANEL (PRODUCTION READY)
 // ======================================================
-
+import 'dotenv/config';
 import express           from "express";
 import path              from "path";
 import { fileURLToPath } from "url";
@@ -13,6 +13,8 @@ import fs, {
   statSync
 }                        from "fs";
 import os                from "os";
+import https             from "https";
+import http              from "http";
 import mime              from "mime-types";
 
 import { downloadYouTube }     from "./youtube.js";
@@ -62,15 +64,53 @@ console.log(`[FB/Insta] Cookies      : ${fs.existsSync(COOKIES_FB_INSTA) ? "foun
 let serverInstance = null;
 
 /* ======================================================
+   AUTO-UPDATE CONFIGURATION
+   ─────────────────────────────────────────────────────
+   Set these in your .env or via Electron's process.env:
+
+     APP_VERSION=1.2.0
+     GITHUB_OWNER=your-username
+     GITHUB_REPO=coevas
+
+   Update flow:
+     1. App starts → polls /update/check on boot
+     2. If update available → frontend shows forced modal
+     3. User clicks "Update Now" → POST /update/download
+        (progress streams via SSE /update/progress)
+     4. Download complete → POST /update/apply
+        (spawns installer silently, app exits)
+     5. New EXE installs in place, restarts
+     6. Cookies survive because they live in COOKIES_DIR
+        (~/.coevas) — completely outside the install dir
+====================================================== */
+const CURRENT_VERSION   = process.env.APP_VERSION   || "1.0.0";
+const GITHUB_OWNER      = process.env.GITHUB_OWNER  || "your-username";
+const GITHUB_REPO       = process.env.GITHUB_REPO   || "coevas";
+const GITHUB_API_BASE   = "https://api.github.com";
+const UPDATE_TEMP_DIR   = path.join(os.tmpdir(), "coevas-update");
+
+// In-memory state for the active update download
+const updateState = {
+  downloading:   false,
+  downloadedPath: null,
+  latestVersion:  null,
+  progressRes:    null,      // SSE response for update progress
+};
+
+console.log(`[Coevas]   Version      : ${CURRENT_VERSION}`);
+console.log(`[Coevas]   Update repo  : ${GITHUB_OWNER}/${GITHUB_REPO}`);
+
+/* ======================================================
    MIDDLEWARE
 ====================================================== */
-app.use(express.json({ limit: "4mb" }));  // 4 MB — enough for any cookies file
+app.use(express.json({ limit: "4mb" }));
 app.use(express.static(path.join(__dirname, "../public")));
 
 const limiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
-app.use("/download", limiter);
-app.use("/info",     limiter);
-app.use("/serve",    limiter);
+app.use("/download",        limiter);
+app.use("/info",            limiter);
+app.use("/serve",           limiter);
+app.use("/update/download", rateLimit({ windowMs: 60 * 1000, max: 3 }));
 
 /* ======================================================
    SSE HELPER
@@ -81,16 +121,19 @@ function sseWrite(res, data) {
   if (typeof res.flush === "function") res.flush();
 }
 
-/* ======================================================
-   GET /progress
-====================================================== */
-app.get("/progress", (req, res) => {
+function sseSetup(res) {
   res.setHeader("Content-Type",      "text/event-stream");
   res.setHeader("Cache-Control",     "no-cache, no-transform");
   res.setHeader("Connection",        "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
+}
 
+/* ======================================================
+   GET /progress  (download progress SSE)
+====================================================== */
+app.get("/progress", (req, res) => {
+  sseSetup(res);
   app.locals.progressRes = res;
   sseWrite(res, "data: 0\n\n");
 
@@ -102,15 +145,10 @@ app.get("/progress", (req, res) => {
 });
 
 /* ======================================================
-   GET /logs
+   GET /logs  (log SSE)
 ====================================================== */
 app.get("/logs", (req, res) => {
-  res.setHeader("Content-Type",      "text/event-stream");
-  res.setHeader("Cache-Control",     "no-cache, no-transform");
-  res.setHeader("Connection",        "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.flushHeaders();
-
+  sseSetup(res);
   app.locals.logRes = res;
   sseWrite(res, "data: coevas panel activated successfully! \\n\n\n");
 
@@ -186,6 +224,406 @@ function codecLabel(vcodec = "") {
   if (vcodec.startsWith("avc1")) return "H.264";
   return vcodec.split(".")[0].toUpperCase();
 }
+
+/* ======================================================
+   VERSION HELPER
+   ─────────────────────────────────────────────────────
+   Compares semver strings. Returns true if b > a.
+   e.g. isNewer("1.0.0", "1.1.0") → true
+====================================================== */
+function isNewer(current, latest) {
+  const parse = (v) =>
+    (v || "0.0.0")
+      .replace(/^v/i, "")
+      .split(".")
+      .map(n => parseInt(n, 10) || 0);
+
+  const [cMaj, cMin, cPat] = parse(current);
+  const [lMaj, lMin, lPat] = parse(latest);
+
+  if (lMaj !== cMaj) return lMaj > cMaj;
+  if (lMin !== cMin) return lMin > cMin;
+  return lPat > cPat;
+}
+
+/* ======================================================
+   HTTP/HTTPS GET HELPER (follows redirects, max 5)
+   ─────────────────────────────────────────────────────
+   Returns { statusCode, headers, body(Buffer) }
+====================================================== */
+function httpGet(url, extraHeaders = {}, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    if (redirectsLeft <= 0) return reject(new Error("Too many redirects"));
+
+    const lib      = url.startsWith("https") ? https : http;
+    const options  = {
+      headers: {
+        "User-Agent": `Coevas/${CURRENT_VERSION} (auto-updater)`,
+        ...extraHeaders,
+      },
+    };
+
+    lib.get(url, options, (res) => {
+      const { statusCode, headers } = res;
+
+      if ([301, 302, 303, 307, 308].includes(statusCode) && headers.location) {
+        res.resume(); // drain
+        return resolve(httpGet(headers.location, extraHeaders, redirectsLeft - 1));
+      }
+
+      const chunks = [];
+      res.on("data",  (c) => chunks.push(c));
+      res.on("end",   ()  => resolve({ statusCode, headers, body: Buffer.concat(chunks) }));
+      res.on("error", reject);
+    }).on("error", reject);
+  });
+}
+
+/* ======================================================
+   GITHUB RELEASE HELPER
+   ─────────────────────────────────────────────────────
+   Fetches the latest release JSON from GitHub API.
+   Returns the parsed release object or throws.
+====================================================== */
+async function fetchLatestRelease() {
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+  const { statusCode, body } = await httpGet(url, {
+    Accept: "application/vnd.github+json",
+    ...(process.env.GITHUB_TOKEN
+      ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
+      : {}),
+  });
+
+  if (statusCode !== 200) {
+    throw new Error(`GitHub API returned HTTP ${statusCode}`);
+  }
+
+  return JSON.parse(body.toString("utf8"));
+}
+
+/* ======================================================
+   ASSET PICKER
+   ─────────────────────────────────────────────────────
+   Picks the right installer asset for the current OS:
+     Windows → .exe  (NSIS / Squirrel installer)
+     macOS   → .dmg
+     Linux   → .AppImage
+====================================================== */
+function pickAsset(assets = []) {
+  const platform = os.platform(); // "win32" | "darwin" | "linux"
+  const exts = {
+    win32:  [".exe"],
+    darwin: [".dmg", ".pkg"],
+    linux:  [".AppImage", ".deb"],
+  }[platform] || [".exe"];
+
+  for (const ext of exts) {
+    const asset = assets.find(a =>
+      a.name.toLowerCase().endsWith(ext) &&
+      a.state === "uploaded"
+    );
+    if (asset) return asset;
+  }
+
+  // Fallback — return first available asset
+  return assets.find(a => a.state === "uploaded") || null;
+}
+
+/* ======================================================
+   AUTO-UPDATE: GET /update/check
+   ─────────────────────────────────────────────────────
+   Called once on app boot by the frontend.
+   Response:
+   {
+     ok: true,
+     updateAvailable: boolean,
+     currentVersion:  "1.0.0",
+     latestVersion:   "1.1.0",
+     releaseNotes:    "...",
+     assetName:       "Coevas-Setup-1.1.0.exe",
+     downloadUrl:     "https://...",  // direct download URL
+     publishedAt:     "2025-..."
+   }
+====================================================== */
+app.get("/update/check", async (req, res) => {
+  try {
+    const release = await fetchLatestRelease();
+    const latestVersion = (release.tag_name || "").replace(/^v/i, "");
+    const updateAvailable = isNewer(CURRENT_VERSION, latestVersion);
+    const asset = pickAsset(release.assets || []);
+
+    updateState.latestVersion = latestVersion;
+
+    return res.json({
+      ok:              true,
+      updateAvailable,
+      currentVersion:  CURRENT_VERSION,
+      latestVersion,
+      releaseNotes:    release.body     || "",
+      assetName:       asset?.name      || null,
+      downloadUrl:     asset?.browser_download_url || null,
+      publishedAt:     release.published_at || null,
+    });
+
+  } catch (err) {
+    console.error("[Update/check] Error:", err.message);
+    return res.json({
+      ok:              false,
+      updateAvailable: false,
+      currentVersion:  CURRENT_VERSION,
+      error:           err.message,
+    });
+  }
+});
+
+/* ======================================================
+   AUTO-UPDATE: GET /update/progress  (SSE)
+   ─────────────────────────────────────────────────────
+   Streams download progress as:
+     data: { percent: 42, bytesReceived: 1048576, totalBytes: 2500000 }
+   And on completion:
+     data: { done: true }
+   And on error:
+     data: { error: "message" }
+====================================================== */
+app.get("/update/progress", (req, res) => {
+  sseSetup(res);
+  updateState.progressRes = res;
+  sseWrite(res, `data: ${JSON.stringify({ percent: 0 })}\n\n`);
+
+  const hb = setInterval(() => sseWrite(res, ": ping\n\n"), 15_000);
+  req.on("close", () => {
+    clearInterval(hb);
+    if (updateState.progressRes === res) updateState.progressRes = null;
+  });
+});
+
+/* ======================================================
+   AUTO-UPDATE: POST /update/download
+   ─────────────────────────────────────────────────────
+   Body: { downloadUrl: "https://..." }
+
+   Downloads the installer to a temp file, pushing
+   progress over the /update/progress SSE.
+   When done:
+     { ok: true, savedTo: "/tmp/coevas-update/Coevas-1.1.0.exe" }
+
+   Cookie safety:
+   Cookies live in COOKIES_DIR (~/.coevas) which is
+   completely outside the install directory. They are
+   NEVER touched by the installer — zero user friction.
+====================================================== */
+app.post("/update/download", async (req, res) => {
+  const { downloadUrl } = req.body || {};
+
+  if (!downloadUrl) return sendJsonError(res, 400, "downloadUrl required");
+  if (updateState.downloading) return sendJsonError(res, 409, "Download already in progress");
+
+  // Validate it's a GitHub download URL for safety
+  if (!downloadUrl.includes("github.com") && !downloadUrl.includes("objects.githubusercontent.com")) {
+    return sendJsonError(res, 400, "Only GitHub release asset URLs are accepted");
+  }
+
+  // Prepare temp dir
+  try {
+    if (!fs.existsSync(UPDATE_TEMP_DIR)) {
+      fs.mkdirSync(UPDATE_TEMP_DIR, { recursive: true });
+    }
+    // Clean any previous partial download
+    fs.readdirSync(UPDATE_TEMP_DIR).forEach(f => {
+      try { fs.unlinkSync(path.join(UPDATE_TEMP_DIR, f)); } catch {}
+    });
+  } catch (e) {
+    return sendJsonError(res, 500, "Cannot prepare temp directory: " + e.message);
+  }
+
+  const filename   = decodeURIComponent(downloadUrl.split("/").pop().split("?")[0]) || "coevas-update.exe";
+  const destPath   = path.join(UPDATE_TEMP_DIR, filename);
+  const fileStream = fs.createWriteStream(destPath);
+
+  updateState.downloading    = true;
+  updateState.downloadedPath = null;
+
+  // Acknowledge immediately so frontend can open SSE
+  res.json({ ok: true, message: "Download started", filename });
+
+  // ── Streamed download with progress ──────────────────
+  function sendUpdateProgress(data) {
+    if (updateState.progressRes && !updateState.progressRes.writableEnded) {
+      sseWrite(updateState.progressRes, `data: ${JSON.stringify(data)}\n\n`);
+    }
+  }
+
+  async function doDownload(url, redirectsLeft = 10) {
+    if (redirectsLeft <= 0) throw new Error("Too many redirects");
+
+    return new Promise((resolve, reject) => {
+      const lib     = url.startsWith("https") ? https : http;
+      const options = {
+        headers: {
+          "User-Agent": `Coevas/${CURRENT_VERSION} (auto-updater)`,
+          Accept:       "application/octet-stream",
+        },
+      };
+
+      lib.get(url, options, (response) => {
+        const { statusCode, headers } = response;
+
+        if ([301, 302, 303, 307, 308].includes(statusCode) && headers.location) {
+          response.resume();
+          return resolve(doDownload(headers.location, redirectsLeft - 1));
+        }
+
+        if (statusCode !== 200) {
+          response.resume();
+          return reject(new Error(`HTTP ${statusCode} from asset URL`));
+        }
+
+        const totalBytes = parseInt(headers["content-length"] || "0", 10);
+        let bytesReceived = 0;
+        let lastPct = -1;
+
+        response.on("data", (chunk) => {
+          bytesReceived += chunk.length;
+          if (totalBytes > 0) {
+            const pct = Math.floor((bytesReceived / totalBytes) * 100);
+            if (pct !== lastPct) {
+              lastPct = pct;
+              sendUpdateProgress({ percent: pct, bytesReceived, totalBytes });
+            }
+          } else {
+            sendUpdateProgress({ percent: -1, bytesReceived, totalBytes: null });
+          }
+        });
+
+        response.on("error", reject);
+        response.pipe(fileStream);
+        fileStream.on("finish", resolve);
+        fileStream.on("error", reject);
+      }).on("error", reject);
+    });
+  }
+
+  try {
+    console.log(`[Update] Downloading: ${downloadUrl}`);
+    await doDownload(downloadUrl);
+    updateState.downloadedPath = destPath;
+    updateState.downloading    = false;
+    console.log(`[Update] Download complete: ${destPath}`);
+    sendUpdateProgress({ done: true, savedTo: destPath });
+  } catch (err) {
+    updateState.downloading = false;
+    console.error("[Update] Download error:", err.message);
+    try { fs.unlinkSync(destPath); } catch {}
+    sendUpdateProgress({ error: err.message });
+  }
+});
+
+/* ======================================================
+   AUTO-UPDATE: POST /update/apply
+   ─────────────────────────────────────────────────────
+   Launches the downloaded installer and exits.
+
+   On Windows (NSIS):
+     Coevas-Setup-1.1.0.exe /S   ← silent install
+   On macOS:
+     open -W Coevas-1.1.0.dmg   ← mount + user installs
+   On Linux (AppImage):
+     chmod +x → spawn detached
+
+   The server process exits AFTER spawning the installer.
+   Electron's "will-quit" handler in main.js should call
+   app.quit() when it receives the IPC from here (or the
+   server can directly signal Electron via process IPC).
+
+   Cookie note:
+   Installer never touches ~/.coevas — cookies are safe.
+   On first boot of new version, cookies are auto-loaded
+   from the same COOKIES_DIR as before. Zero user action.
+====================================================== */
+app.post("/update/apply", (req, res) => {
+  const installer = updateState.downloadedPath;
+
+  if (!installer) {
+    return sendJsonError(res, 400, "No installer ready — run /update/download first");
+  }
+  if (!fs.existsSync(installer)) {
+    updateState.downloadedPath = null;
+    return sendJsonError(res, 404, "Installer file missing — re-download required");
+  }
+
+  console.log(`[Update] Applying installer: ${installer}`);
+
+  try {
+    const platform = os.platform();
+    let child;
+
+    if (platform === "win32") {
+      child = spawn(installer, ["/S", "/NCRC"], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      });
+    } else if (platform === "darwin") {
+      child = spawn("open", ["-W", installer], {
+        detached: true,
+        stdio: "ignore",
+      });
+    } else {
+      try { fs.chmodSync(installer, 0o755); } catch {}
+      child = spawn(installer, [], {
+        detached: true,
+        stdio: "ignore",
+      });
+    }
+
+    child.unref();
+
+    res.json({ ok: true, message: "Installer launched — app will restart" });
+
+    setTimeout(() => {
+      console.log("[Update] Signaling Electron main process to quit...");
+
+      if (typeof process.emit === "function" && process.listenerCount("coevas-apply-update") > 0) {
+        process.emit("coevas-apply-update");
+        return;
+      }
+
+      process.exit(0);
+    }, 300);
+
+  } catch (err) {
+    console.error("[Update] Apply error:", err.message);
+    return sendJsonError(res, 500, "Failed to launch installer: " + err.message);
+  }
+});
+
+/* ======================================================
+   AUTO-UPDATE: DELETE /update/cancel
+   ─────────────────────────────────────────────────────
+   Aborts a pending download and cleans up the temp dir.
+====================================================== */
+app.delete("/update/cancel", (req, res) => {
+  updateState.downloading    = false;
+  updateState.downloadedPath = null;
+
+  try {
+    if (fs.existsSync(UPDATE_TEMP_DIR)) {
+      fs.readdirSync(UPDATE_TEMP_DIR).forEach(f => {
+        try { fs.unlinkSync(path.join(UPDATE_TEMP_DIR, f)); } catch {}
+      });
+    }
+  } catch {}
+
+  if (updateState.progressRes && !updateState.progressRes.writableEnded) {
+    sseWrite(updateState.progressRes, `data: ${JSON.stringify({ canceled: true })}\n\n`);
+    updateState.progressRes.end();
+    updateState.progressRes = null;
+  }
+
+  console.log("[Update] Download canceled");
+  return res.json({ ok: true, message: "Update download canceled" });
+});
 
 /* ======================================================
    GALLERY-DL: INSTAGRAM CAROUSEL
@@ -341,10 +779,6 @@ app.get("/serve", (req, res) => {
      });
 ====================================================== */
 
-/**
- * GET /cookies/status
- * Returns which cookie files exist in userData.
- */
 app.get("/cookies/status", (req, res) => {
   return res.json({
     ok: true,
@@ -356,13 +790,6 @@ app.get("/cookies/status", (req, res) => {
   });
 });
 
-/**
- * POST /cookies/import
- * Body: { platform: "terabox" | "fbinsta", content: "<raw Netscape text>" }
- *
- * Validates the content is a proper Netscape cookies file,
- * then writes it to the correct file inside COOKIES_DIR.
- */
 app.post("/cookies/import", (req, res) => {
   const { platform, content } = req.body || {};
 
@@ -377,7 +804,6 @@ app.post("/cookies/import", (req, res) => {
     return sendJsonError(res, 400, `Unknown platform "${platform}". Supported: terabox, fbinsta`);
   }
 
-  // Validate Netscape cookie format
   const trimmed   = content.trim();
   const lines     = trimmed.split("\n").map(l => l.trim()).filter(Boolean);
   const dataLines = lines.filter(l => !l.startsWith("#"));
@@ -412,10 +838,6 @@ app.post("/cookies/import", (req, res) => {
   }
 });
 
-/**
- * DELETE /cookies/:platform
- * Removes the cookie file for the given platform from userData.
- */
 app.delete("/cookies/:platform", (req, res) => {
   const { platform } = req.params;
   const SUPPORTED    = { terabox: COOKIES_TERABOX, fbinsta: COOKIES_FB_INSTA };
@@ -555,7 +977,6 @@ app.post("/info", async (req, res) => {
   const { url } = req.body || {};
   if (!url) return sendJsonError(res, 400, "URL required");
 
-  /* ── Non-YouTube ── */
   if (!isYouTube(url)) {
     let type    = "unknown";
     let handler = "yt-dlp";
@@ -627,7 +1048,6 @@ app.post("/info", async (req, res) => {
     }
   }
 
-  /* ── All probes exhausted — graceful degradation ── */
   if (!info) {
     console.warn("[Info] All clients exhausted — returning degraded response");
     return res.json({

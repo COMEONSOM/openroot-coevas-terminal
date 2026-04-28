@@ -42,3 +42,9 @@ desktop.ini
 
 certs/
 *.pfx
+
+# ── Environment variables ───────────────────────────────
+.env
+.env.local
+.env.*.local
+server/.env
