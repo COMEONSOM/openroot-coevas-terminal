@@ -2,7 +2,7 @@
 
   <h1>Coevas Terminal</h1>
   <p><strong>Unified Media Downloader for Windows</strong></p>
-  <p>Built by <a href="https://github.com/COMEONSOM">Openroot Systems</a></p>
+  <p>Built by <a href="https://openroot.in/">Openroot Systems</a></p>
 
   <p>
     <img src="https://img.shields.io/badge/Electron-191970?style=for-the-badge&logo=Electron&logoColor=white" alt="Electron">
