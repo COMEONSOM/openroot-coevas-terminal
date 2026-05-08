@@ -1,6 +1,6 @@
 {
   "name": "coevas-panel-openroot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Coevas Terminal — 8K Media Downloader by Openroot Systems",
   "author": {
     "name": "Openroot Systems",
@@ -12,6 +12,7 @@
   "scripts": {
     "start": "electron .",
     "clean": "rimraf dist",
+    "prebuild": "node scripts/bump-version.cjs minor && node scripts/update-manifest.cjs",
     "build": "npm run clean && electron-builder"
   },
   "devDependencies": {
@@ -23,7 +24,7 @@
     "appId": "com.openroot.coevas",
     "productName": "Coevas Terminal",
     "copyright": "© 2026 Openroot Systems. All rights reserved.",
-    "buildVersion": "1.2.0",
+    "buildVersion": "1.3.0",
     "asar": true,
     "asarUnpack": [
       "server/bin/**/*",

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
+import dotenv from "dotenv";
 import fs from "fs";
 import http from "http";
 import path from "path";
@@ -6,6 +7,11 @@ import { fileURLToPath, pathToFileURL } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/* ─── Load environment variables ───────────────────────────── */
+dotenv.config({
+  path: path.join(__dirname, "../server/.env"),
+});
 
 // dev  → port 3000  (npm start, reads source files)
 // prod → port 39281 (built .exe, reads frozen resources)
@@ -706,7 +712,7 @@ app.whenReady().then(async () => {
   console.log(`📁 userData: ${process.env.COEVAS_USER_DATA}`);
   console.log(`🏷️  Version : ${CURRENT_VERSION}`);
   console.log(`🐙 Repo    : ${GITHUB_OWNER}/${GITHUB_REPO}`);
-
+  console.log(`🔄 Update manifest: ${UPDATE_MANIFEST_URL || "NOT SET"}`);
   migrateCookies();
 
   try {
