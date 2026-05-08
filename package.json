@@ -74,7 +74,7 @@
       "installerIcon": "public/assets/company-icon.ico",
       "uninstallerIcon": "public/assets/company-icon.ico",
       "installerHeaderIcon": "public/assets/company-icon.ico",
-      "uninstallDisplayName": "Coevas Terminal ${version} by Openroot Systems",
+      "uninstallDisplayName": "Coevas Terminal",
       "displayLanguageSelector": false,
       "multiLanguageInstaller": false,
       "deleteAppDataOnUninstall": false,
