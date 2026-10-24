@@ -335,6 +335,7 @@ npm run obfuscate:site
 |---------|----------|
 | Port 3000/39281 in use | `taskkill /F /IM node.exe` |
 | Binaries not found | Verify `yt-dlp`, `ffmpeg`, `gallery-dl` are added to PATH |
+| Refresh bundled yt-dlp | Run `powershell -NoProfile -File scripts/update-yt-dlp.ps1`, then rebuild the app |
 | Build version mismatch | Run `npm run build` to regenerate manifests |
 | Users not getting updates | Check `update.json` is uploaded to `openroot-web` root |
 | Fresh clone won't start | Manually download `yt-dlp`, `ffmpeg`, `ffprobe` first |

@@ -472,15 +472,20 @@ app.delete("/cookies/:platform", (req, res) => {
    files. Same for Threads and Facebook.
 ====================================================== */
 app.post("/download", async (req, res) => {
-  const { url, quality, allowAV1 = false, mode = "video" } = req.body || {};
+  const { url, quality, allowAV1 = false, mode = "video", bestHeight, playerClient, useCookies } = req.body || {};
 
   if (!url)                      return sendJsonError(res, 400, "URL required");
   if (!validateDownloadUrl(url)) return sendJsonError(res, 400, "Invalid URL");
 
   try {
     // YouTube
-    if (isYouTube(url))
-      return await downloadYouTube({ url, quality, allowAV1, mode }, res, app);
+    if (isYouTube(url)) {
+      const selectedClient = INFO_CLIENTS.includes(playerClient) ? playerClient : "tv_embedded";
+      return await downloadYouTube({
+        url, quality, allowAV1, mode, bestHeight, playerClient: selectedClient,
+        useCookies: useCookies !== false,
+      }, res, app);
+    }
 
     // Facebook — always use facebook.js (handles all post types + yt-dlp fallback)
     if (isFacebook(url))
@@ -578,16 +583,18 @@ app.post("/info", async (req, res) => {
 
   // YouTube probing
   let info = null;
+  let infoClient = null;
+  let infoCookiesUsed = true;
   console.log("[Info] Round 1: probing with cookies...");
   for (const client of INFO_CLIENTS) {
     info = await probeInfo(client, url, true);
-    if (info) { console.log(`[Info] Success with client: ${client}`); break; }
+    if (info) { infoClient = client; infoCookiesUsed = true; console.log(`[Info] Success with client: ${client}`); break; }
   }
   if (!info) {
     console.log("[Info] Round 2: retrying WITHOUT cookies...");
     for (const client of INFO_CLIENTS) {
       info = await probeInfo(client, url, false);
-      if (info) { console.log(`[Info] Success (no-cookies): ${client}`); break; }
+      if (info) { infoClient = client; infoCookiesUsed = false; console.log(`[Info] Success (no-cookies): ${client}`); break; }
     }
   }
 
@@ -595,6 +602,7 @@ app.post("/info", async (req, res) => {
     return res.json({
       ok: true, platform: "youtube", degraded: true,
       title: null, thumbnail: null, maxHeight: null,
+      maxHeightAV1: null, maxHeightNoAV1: null, playerClient: null, useCookies: null,
       bestCodecAV1: "Unknown", bestCodec: "Unknown", codec: "Unknown",
       codecByHeight: {}, availableHeights: [], h264Heights: [], sizeByHeight: {},
       note: "Format info unavailable — download will still be attempted automatically",
@@ -620,10 +628,12 @@ app.post("/info", async (req, res) => {
   const bestByHeightAV1   = buildBestByHeight(videoFormats);
   const bestByHeightNoAV1 = buildBestByHeight(videoFormats.filter(f => !f.vcodec.startsWith("av01")));
 
-  const heights   = Object.keys(bestByHeightAV1).map(Number).sort((a,b) => a - b);
-  const maxHeight = heights.length ? Math.max(...heights) : null;
-  const bestFmtAV1   = maxHeight ? bestByHeightAV1[maxHeight]   : null;
-  const bestFmtNoAV1 = maxHeight ? bestByHeightNoAV1[maxHeight] : null;
+  const heights       = Object.keys(bestByHeightAV1).map(Number).sort((a,b) => a - b);
+  const heightsNoAV1  = Object.keys(bestByHeightNoAV1).map(Number).sort((a,b) => a - b);
+  const maxHeightAV1  = heights.length ? Math.max(...heights) : null;
+  const maxHeightNoAV1 = heightsNoAV1.length ? Math.max(...heightsNoAV1) : null;
+  const bestFmtAV1   = maxHeightAV1 ? bestByHeightAV1[maxHeightAV1] : null;
+  const bestFmtNoAV1 = maxHeightNoAV1 ? bestByHeightNoAV1[maxHeightNoAV1] : null;
 
   const sizeByHeight = {};
   for (const [h, f] of Object.entries(bestByHeightAV1)) {
@@ -645,11 +655,16 @@ app.post("/info", async (req, res) => {
   return res.json({
     ok: true, platform: "youtube", degraded: false,
     title: info.title || null, thumbnail: info.thumbnail || null,
-    maxHeight,
+    maxHeight: maxHeightAV1,
+    maxHeightAV1,
+    maxHeightNoAV1,
+    playerClient: infoClient,
+    useCookies: infoCookiesUsed,
     bestCodecAV1: bestFmtAV1   ? codecLabel(bestFmtAV1.vcodec)   : "H.264",
     bestCodec:    bestFmtNoAV1 ? codecLabel(bestFmtNoAV1.vcodec) : "H.264",
     codec:        bestFmtNoAV1 ? codecLabel(bestFmtNoAV1.vcodec) : "H.264",
-    codecByHeight, availableHeights: heights, h264Heights, sizeByHeight,
+    codecByHeight, availableHeights: heights, availableHeightsNoAV1: heightsNoAV1,
+    h264Heights, sizeByHeight,
   });
 });
 

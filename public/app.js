@@ -34,6 +34,14 @@ let isRunning          = false;
 let sourceInfo         = null;
 let probeDebounceTimer = null;
 
+function preferredBestHeight(info, allowAV1) {
+  if (!info) return null;
+  if (allowAV1) return info.maxHeightAV1 ?? info.maxHeight ?? null;
+  return Object.prototype.hasOwnProperty.call(info, "maxHeightNoAV1")
+    ? info.maxHeightNoAV1
+    : info.maxHeight ?? null;
+}
+
 const qualityRow    = qualitySelect?.closest(".field")  || qualitySelect?.parentElement;
 const av1ToggleWrap = maxQualityToggle?.closest(".toggle") || maxQualityToggle?.parentElement;
 
@@ -179,7 +187,7 @@ function syncModeUI() {
         displayCodec  = "H.264";
 
       } else if (selectedVal === "best" || !selectedVal) {
-        displayHeight = sourceInfo.maxHeight;
+        displayHeight = preferredBestHeight(sourceInfo, !!maxQualityToggle?.checked);
         displayCodec  = maxQualityToggle?.checked
           ? (sourceInfo.bestCodecAV1 || sourceInfo.bestCodec || "AV1")
           : (sourceInfo.bestCodec    || sourceInfo.codec     || "H.264");
@@ -382,6 +390,11 @@ if (maxQualityToggle) {
     if (!selectedVal.startsWith("h264-")) {
       syncModeUI();
     }
+    const bestOption = [...(qualitySelect?.options || [])].find(option => option.value === "best");
+    if (bestOption) {
+      const bestHeight = preferredBestHeight(sourceInfo, maxQualityToggle.checked);
+      bestOption.text = bestHeight ? `Best (${bestHeight}p)` : "Best (unavailable for this codec preference)";
+    }
   });
 }
 
@@ -442,7 +455,7 @@ async function probeSource(url) {
       qualitySelect.style.opacity = "1";
     }
 
-    const maxH  = data.maxHeight;
+    const maxH  = preferredBestHeight(data, !!maxQualityToggle?.checked);
     const codec = data.bestCodec || data.codec || "H.264";
 
     if (fileResolution) fileResolution.textContent = maxH ? `${maxH}p` : "—";
@@ -679,6 +692,9 @@ btn.onclick = async () => {
   const quality  = qualitySelect?.value      || "best";
   const allowAV1 = maxQualityToggle?.checked || false;
   const mode     = modeSelect?.value         || "video";
+  const bestHeight = quality === "best" && sourceInfo?.platform === "youtube"
+    ? preferredBestHeight(sourceInfo, allowAV1)
+    : null;
 
   if (!url) {
     setStatus("Enter a valid URL", "error");
@@ -713,7 +729,11 @@ btn.onclick = async () => {
       res = await fetch("/download", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ url, quality, allowAV1, mode }),
+        body:    JSON.stringify({
+          url, quality, allowAV1, mode, bestHeight,
+          playerClient: sourceInfo?.platform === "youtube" ? sourceInfo.playerClient : undefined,
+          useCookies: sourceInfo?.platform === "youtube" ? sourceInfo.useCookies : undefined,
+        }),
         signal:  controller.signal
       });
     } finally {

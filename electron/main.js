@@ -35,10 +35,13 @@ let appQuitting = false;
 
 /* ─── App icon path ────────────────────────────────────────── */
 function getAppIconPath() {
-  const candidates = [
-    path.join(__dirname, "../public/assets/company-icon.png"),
-    path.join(process.resourcesPath, "public/assets/company-icon.png"),
-  ];
+  const iconFiles = process.platform === "win32"
+    ? ["company-icon.ico", "company-icon.png"]
+    : ["company-icon.png", "company-icon.ico"];
+  const candidates = iconFiles.flatMap((file) => [
+    path.join(__dirname, "../public/assets", file),
+    path.join(process.resourcesPath, "public/assets", file),
+  ]);
   return candidates.find((p) => fs.existsSync(p));
 }
 

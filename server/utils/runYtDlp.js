@@ -11,17 +11,23 @@ const __dirname  = path.dirname(__filename);
 
 /* ======================================================
    COOKIES
-   Only uses cookies if the user explicitly placed a valid
-   cookies_youtube.txt at ~/.coevas/cookies_youtube.txt
-   Never auto-copies from source — stale dev cookies break
-   YouTube requests by triggering auth rejection (null JSON)
+   Prefer Electron's user-data cookie file, with the legacy
+   ~/.coevas location retained for existing installations.
+   Cookies remain optional.
 ====================================================== */
-const YT_COOKIES_PROD = path.join(os.homedir(), ".coevas", "cookies_youtube.txt");
+const COOKIE_PATHS = [
+  process.env.COEVAS_USER_DATA && path.join(process.env.COEVAS_USER_DATA, "cookies_youtube.txt"),
+  path.join(os.homedir(), ".coevas", "cookies_youtube.txt"),
+].filter(Boolean);
 
-function getCookieArgs() {
-  if (existsSync(YT_COOKIES_PROD)) {
-    console.log("[Cookies] Using:", YT_COOKIES_PROD);
-    return ["--cookies", YT_COOKIES_PROD];
+function getCookieArgs(preferredPath = null) {
+  const candidates = preferredPath
+    ? [preferredPath, ...COOKIE_PATHS]
+    : COOKIE_PATHS;
+  const cookiePath = [...new Set(candidates)].find(candidate => existsSync(candidate));
+  if (cookiePath) {
+    console.log("[Cookies] Using configured YouTube cookie file");
+    return ["--cookies", cookiePath];
   }
   console.log("[Cookies] No cookies file — proceeding without");
   return [];
@@ -90,10 +96,11 @@ check.on("error", e  => console.error("[yt-dlp ERROR] Binary not found:", e.mess
    CORE DOWNLOAD SPAWNER
 ====================================================== */
 export function spawnYtDlp(client = "tv_embedded", userArgs = [], opts = {}) {
+  const { useCookies = true, cookiePath = null, ...spawnOpts } = opts;
   const args = [
     ...BASE,
     "--extractor-args", `youtube:player_client=${client}`,
-    ...getCookieArgs(),
+    ...(useCookies ? getCookieArgs(cookiePath) : []),
     "--ffmpeg-location", FFMPEG_BIN,
     ...userArgs.filter(a => !STRIP.has(a)),
   ];
@@ -102,7 +109,7 @@ export function spawnYtDlp(client = "tv_embedded", userArgs = [], opts = {}) {
   return spawn(YTDLP_BIN, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env:   SPAWN_ENV,
-    ...opts,
+    ...spawnOpts,
   });
 }
 
@@ -110,10 +117,11 @@ export function spawnYtDlp(client = "tv_embedded", userArgs = [], opts = {}) {
    INFO PROBE SPAWNER — with cookies
 ====================================================== */
 export function spawnYtDlpProbe(client = "tv_embedded", userArgs = [], opts = {}) {
+  const { useCookies = true, cookiePath = null, ...spawnOpts } = opts;
   const args = [
     ...BASE_PROBE,
     "--extractor-args", `youtube:player_client=${client}`,
-    ...getCookieArgs(),
+    ...(useCookies ? getCookieArgs(cookiePath) : []),
     ...userArgs,
   ];
 
@@ -121,7 +129,7 @@ export function spawnYtDlpProbe(client = "tv_embedded", userArgs = [], opts = {}
   return spawn(YTDLP_BIN, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env:   SPAWN_ENV,
-    ...opts,
+    ...spawnOpts,
   });
 }
 
@@ -130,6 +138,7 @@ export function spawnYtDlpProbe(client = "tv_embedded", userArgs = [], opts = {}
    Fallback when cookie-based probe returns null JSON
 ====================================================== */
 export function spawnYtDlpProbeNoCookies(client = "tv_embedded", userArgs = [], opts = {}) {
+  const { useCookies: _useCookies, cookiePath: _cookiePath, ...spawnOpts } = opts;
   const args = [
     ...BASE_PROBE,
     "--extractor-args", `youtube:player_client=${client}`,
@@ -140,7 +149,7 @@ export function spawnYtDlpProbeNoCookies(client = "tv_embedded", userArgs = [], 
   return spawn(YTDLP_BIN, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env:   SPAWN_ENV,
-    ...opts,
+    ...spawnOpts,
   });
 }
 
